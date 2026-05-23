@@ -1,0 +1,8 @@
+{
+	"mode": "auto",
+	"httpFirst": true,
+	"preferredEngine": "yahoo",
+	"locale": "en-US",
+	"language": "en",
+	"browserFallbackThreshold": 0.55
+}

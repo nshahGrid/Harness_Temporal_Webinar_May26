@@ -1,0 +1,1714 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Pi + Temporal Case Study Demo</title>
+		<style>
+			:root {
+				color-scheme: light;
+				--bg: #f6f7fa;
+				--panel: #ffffff;
+				--ink: #17202a;
+				--muted: #607083;
+				--line: #d8e0ea;
+				--accent: #0f766e;
+				--accent-2: #5b4ee5;
+				--danger: #b42318;
+				--code-bg: #101828;
+				--code-ink: #e5e7eb;
+				--code-muted: #9ca3af;
+			}
+			* { box-sizing: border-box; }
+			body {
+				margin: 0;
+				background: var(--bg);
+				color: var(--ink);
+				font: 14px/1.45 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+			}
+			header {
+				height: 56px;
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+				padding: 0 20px;
+				border-bottom: 1px solid var(--line);
+				background: #fff;
+			}
+			header h1 { font-size: 16px; margin: 0; }
+			main {
+				height: calc(100vh - 56px);
+				display: grid;
+				grid-template-rows: auto minmax(0, 1fr);
+			}
+			button {
+				border: 1px solid var(--line);
+				background: #fff;
+				color: var(--ink);
+				border-radius: 6px;
+				padding: 8px 10px;
+				font: inherit;
+				cursor: pointer;
+			}
+			button:disabled { cursor: progress; opacity: .65; }
+			button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+			button.secondary { background: var(--accent-2); border-color: var(--accent-2); color: #fff; }
+			button.danger { color: var(--danger); }
+			.status {
+				display: inline-flex;
+				align-items: center;
+				border: 1px solid var(--line);
+				border-radius: 999px;
+				padding: 3px 9px;
+				color: var(--muted);
+				font-size: 12px;
+				white-space: nowrap;
+			}
+			.control-strip {
+				display: grid;
+				grid-template-columns: repeat(3, minmax(0, 1fr));
+				gap: 14px;
+				padding: 12px 18px;
+				border-bottom: 1px solid var(--line);
+				background: #fff;
+			}
+			.control-field {
+				display: flex;
+				flex-direction: column;
+				gap: 5px;
+			}
+			.control-field span {
+				font-size: 11px;
+				font-weight: 700;
+				color: var(--muted);
+				letter-spacing: .04em;
+				text-transform: uppercase;
+			}
+			.control-field select {
+				width: 100%;
+				border: 1px solid var(--line);
+				border-radius: 6px;
+				padding: 8px 10px;
+				background: #fff;
+				color: var(--ink);
+				font: inherit;
+			}
+			.control-field small {
+				color: var(--muted);
+				min-height: 34px;
+			}
+			.panels {
+				min-height: 0;
+				display: grid;
+				grid-template-columns: minmax(420px, 48%) minmax(440px, 1fr);
+			}
+			.panel {
+				min-height: 0;
+				overflow: auto;
+				padding: 18px;
+			}
+			.dev-panel {
+				background: #0b1220;
+				color: var(--code-ink);
+				border-right: 1px solid #253044;
+			}
+			.business-panel { background: var(--bg); }
+			.panel-header {
+				display: flex;
+				align-items: start;
+				justify-content: space-between;
+				gap: 16px;
+				margin-bottom: 14px;
+			}
+			.panel-header h2 { margin: 0 0 4px; font-size: 18px; }
+			.muted { color: var(--muted); }
+			.dev-panel .muted { color: var(--code-muted); }
+			.dev-actions {
+				display: flex;
+				gap: 8px;
+				flex-wrap: wrap;
+				margin-bottom: 12px;
+			}
+			.dev-actions button {
+				background: #172033;
+				border-color: #344055;
+				color: var(--code-ink);
+			}
+			.dev-stream {
+				height: calc(100vh - 266px);
+				min-height: 420px;
+				overflow: auto;
+				border: 1px solid #29364c;
+				border-radius: 8px;
+				background: #101828;
+				padding: 12px;
+			}
+			.stream-empty {
+				border: 1px dashed #3a465b;
+				border-radius: 8px;
+				padding: 14px;
+				color: var(--code-muted);
+			}
+			.stream-entry {
+				border: 1px solid #263244;
+				border-radius: 8px;
+				background: #121c2e;
+				margin-bottom: 10px;
+				overflow: hidden;
+			}
+			.stream-entry header {
+				height: auto;
+				padding: 8px 10px;
+				background: #172033;
+				border-bottom: 1px solid #263244;
+				color: #f9fafb;
+			}
+			.stream-entry header span { color: var(--code-muted); font-size: 12px; }
+			.stream-entry pre,
+			.stream-entry .stream-text {
+				margin: 0;
+				padding: 10px;
+				white-space: pre-wrap;
+				overflow-wrap: anywhere;
+				color: var(--code-ink);
+				font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+			}
+			.stream-entry pre {
+				background: transparent;
+				border: 0;
+				tab-size: 4;
+			}
+			.stream-entry pre.code-block,
+			.dev-reference pre.code-block {
+				padding: 0;
+				white-space: pre;
+				overflow: auto;
+				overflow-wrap: normal;
+				max-height: min(560px, 62vh);
+				background: #0b1220;
+			}
+			.code-line {
+				display: grid;
+				grid-template-columns: 4.5ch minmax(max-content, 1fr);
+				min-height: 18px;
+			}
+			.line-no {
+				position: sticky;
+				left: 0;
+				z-index: 1;
+				user-select: none;
+				text-align: right;
+				padding: 0 9px 0 6px;
+				color: #64748b;
+				background: #0f172a;
+				border-right: 1px solid #263244;
+			}
+			.line-code {
+				padding: 0 14px;
+				min-width: 0;
+			}
+			.code-block.language-text .line-code,
+			.code-block.language-markdown .line-code {
+				white-space: pre-wrap;
+				overflow-wrap: anywhere;
+			}
+			.code-block.language-python .line-code,
+			.code-block.language-json .line-code,
+			.code-block.language-html .line-code,
+			.code-block.language-shell .line-code,
+			.code-block.language-typescript .line-code {
+				white-space: pre;
+			}
+			.syntax-keyword { color: #c084fc; }
+			.syntax-string { color: #86efac; }
+			.syntax-number { color: #fbbf24; }
+			.syntax-comment {
+				color: #94a3b8;
+				font-style: italic;
+			}
+			.syntax-function { color: #67e8f9; }
+			.syntax-decorator { color: #fdba74; }
+			.syntax-builtin { color: #93c5fd; }
+			.syntax-boolean { color: #f472b6; }
+			.syntax-property { color: #bfdbfe; }
+			.syntax-variable { color: #f9a8d4; }
+			.syntax-tag { color: #7dd3fc; }
+			.syntax-attr { color: #f9a8d4; }
+			.worker-grid {
+				display: grid;
+				grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+				gap: 8px;
+				padding: 10px;
+			}
+			.worker-card {
+				border: 1px solid #344055;
+				border-radius: 8px;
+				background: #0b1220;
+				padding: 9px;
+				min-height: 116px;
+			}
+			.worker-card strong {
+				display: block;
+				color: #f9fafb;
+				margin-bottom: 6px;
+				overflow-wrap: anywhere;
+			}
+			.worker-phase {
+				display: inline-flex;
+				border-radius: 999px;
+				padding: 2px 7px;
+				background: #243044;
+				color: #bfdbfe;
+				font-size: 11px;
+				font-weight: 800;
+				text-transform: uppercase;
+				letter-spacing: .04em;
+			}
+			.worker-phase.record,
+			.worker-phase.complete,
+			.worker-phase.aggregate { background: #064e3b; color: #bbf7d0; }
+			.worker-phase.failure { background: #7f1d1d; color: #fecaca; }
+			.worker-phase.retrying { background: #713f12; color: #fde68a; }
+			.worker-card p {
+				margin: 8px 0 0;
+				color: var(--code-ink);
+				font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+			}
+			.worker-url {
+				margin-top: 6px;
+				color: var(--code-muted);
+				font-size: 11px;
+				overflow-wrap: anywhere;
+			}
+			.temporal-primitive {
+				background: #fef08a;
+				color: #111827;
+				border-radius: 3px;
+				padding: 0 3px;
+				font-weight: 800;
+				box-decoration-break: clone;
+				-webkit-box-decoration-break: clone;
+			}
+			.primitive-legend {
+				color: var(--code-muted);
+				font-size: 12px;
+				margin: 8px 0 0;
+			}
+			.primitive-legend mark {
+				margin-right: 6px;
+			}
+			.section-title {
+				font-size: 12px;
+				font-weight: 700;
+				margin: 18px 0 8px;
+				color: var(--muted);
+				text-transform: uppercase;
+				letter-spacing: .04em;
+			}
+			.stage-card,
+			.health-card,
+			.workflow-card {
+				background: var(--panel);
+				border: 1px solid var(--line);
+				border-radius: 8px;
+			}
+			.toolbar {
+				display: flex;
+				gap: 8px;
+				flex-wrap: wrap;
+				margin: 14px 0;
+			}
+			.stage-card {
+				padding: 14px;
+				margin-bottom: 14px;
+			}
+			.health-card {
+				padding: 12px;
+				margin-bottom: 12px;
+			}
+			.health-card.ready { border-color: var(--accent); }
+			.health-card.error { border-color: var(--danger); }
+			.health-card strong { display: block; margin-bottom: 4px; }
+			.stage-card h2,
+			.workflow-card h2 { margin: 0 0 6px; font-size: 18px; }
+			.step-strip {
+				display: grid;
+				grid-template-columns: repeat(4, minmax(0, 1fr));
+				gap: 8px;
+				margin-top: 12px;
+			}
+			.step {
+				border: 1px solid var(--line);
+				border-radius: 8px;
+				padding: 10px;
+				color: var(--muted);
+				background: #fbfcfe;
+			}
+			.step strong {
+				display: block;
+				color: var(--ink);
+				margin-bottom: 4px;
+			}
+			.stream-entry header strong { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+			.workflow-card {
+				padding: 14px;
+				margin-bottom: 14px;
+			}
+			.artifact-list {
+				list-style: none;
+				padding: 0;
+				margin: 12px 0 0;
+				display: grid;
+				gap: 8px;
+			}
+			.artifact-list li {
+				border: 1px solid var(--line);
+				border-radius: 8px;
+				background: #fbfcfe;
+				padding: 10px;
+				overflow-wrap: anywhere;
+			}
+			.artifact-list a { color: var(--accent); font-weight: 700; }
+			.timeline {
+				list-style: none;
+				padding: 0;
+				margin: 0;
+			}
+			.timeline li {
+				padding: 10px 0 10px 18px;
+				border-left: 2px solid var(--line);
+				position: relative;
+			}
+			.timeline li::before {
+				content: "";
+				width: 8px;
+				height: 8px;
+				border-radius: 50%;
+				background: var(--accent);
+				position: absolute;
+				left: -5px;
+				top: 15px;
+			}
+			.detail-grid,
+			.harness-summary {
+				display: grid;
+				grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+				gap: 12px;
+			}
+			.detail-grid pre {
+				max-height: 240px;
+				overflow: auto;
+				white-space: pre-wrap;
+				overflow-wrap: anywhere;
+				background: #f8fafc;
+				border: 1px solid var(--line);
+				border-radius: 8px;
+				padding: 12px;
+			}
+			details {
+				border: 1px solid var(--line);
+				border-radius: 8px;
+				padding: 10px;
+				background: #fbfcfe;
+			}
+			summary { cursor: pointer; font-weight: 600; }
+			.dev-reference {
+				margin-top: 14px;
+				border: 1px solid #29364c;
+				border-radius: 8px;
+				background: #111a2a;
+				padding: 10px;
+			}
+			.dev-reference summary { color: var(--code-ink); }
+			.dev-reference pre {
+				max-height: 300px;
+				overflow: auto;
+				white-space: pre-wrap;
+				overflow-wrap: anywhere;
+				background: #0b1220;
+				border: 1px solid #263244;
+				border-radius: 8px;
+				padding: 12px;
+				color: var(--code-ink);
+				tab-size: 4;
+			}
+			.snippet-tabs {
+				display: flex;
+				gap: 8px;
+				flex-wrap: wrap;
+				margin: 10px 0;
+			}
+			.snippet-tab {
+				background: #172033;
+				border-color: #344055;
+				color: var(--code-ink);
+			}
+			.snippet-tab.active {
+				background: var(--accent-2);
+				border-color: var(--accent-2);
+				color: #fff;
+			}
+			@media (max-width: 1000px) {
+				main { height: auto; }
+				.control-strip,
+				.panels,
+				.detail-grid,
+				.harness-summary,
+				.step-strip { grid-template-columns: 1fr; }
+				.dev-stream { height: 520px; }
+			}
+		</style>
+	</head>
+	<body>
+		<header>
+			<h1>Pi + Temporal Case Study Demo</h1>
+			<span id="connection" class="status">Temporal Cloud</span>
+		</header>
+		<main>
+			<section class="control-strip" aria-label="Demo controls">
+				<label class="control-field">
+					<span>Business scenario</span>
+					<select id="scenarioSelect"></select>
+					<small id="scenarioHint"></small>
+				</label>
+				<label class="control-field">
+					<span>Execution mode</span>
+					<select id="executionMode">
+						<option value="workflow">Temporal workflow</option>
+						<option value="agent">Pi agent draft</option>
+						<option value="harness">Agent harness</option>
+					</select>
+					<small id="executionModeHint"></small>
+				</label>
+				<label class="control-field">
+					<span>Reliability mode</span>
+					<select id="reliabilityMode">
+						<option value="recoverable-failures">Error-prone demo: retryable failures</option>
+						<option value="random-chaos">Live chaos</option>
+						<option value="clean-run">Clean run</option>
+						<option value="permanent-failure">Permanent failure</option>
+					</select>
+					<small id="reliabilityHint"></small>
+				</label>
+			</section>
+			<section class="panels">
+				<aside class="panel dev-panel">
+					<div class="panel-header">
+						<div>
+							<h2>Developer Stream</h2>
+							<div id="modeHint" class="muted">Harness mode selected. Run the numbered story controls from top to bottom.</div>
+						</div>
+						<span id="streamStatus" class="status">Idle</span>
+					</div>
+					<div class="dev-actions">
+						<button id="clearStream">Clear stream</button>
+						<button id="showCodeactReference">Show CodeAct reference</button>
+					</div>
+					<div id="devStream" class="dev-stream">
+						<div class="stream-empty">No execution output yet. Use the controls on the right to run the workflow or harness.</div>
+					</div>
+					<details id="developerReference" class="dev-reference">
+						<summary>Reference snippets; live LLM-generated code appears in the stream</summary>
+						<div id="snippetTabs" class="snippet-tabs"></div>
+						<div class="primitive-legend">
+							Highlighted Temporal primitives:
+							<mark class="temporal-primitive">@workflow.defn</mark>
+							<mark class="temporal-primitive">@activity.defn</mark>
+							<mark class="temporal-primitive">RetryPolicy</mark>
+							<mark class="temporal-primitive">workflow.execute_activity</mark>
+						</div>
+						<pre id="snippetCode"></pre>
+					</details>
+				</aside>
+				<section class="panel business-panel">
+					<div class="panel-header">
+						<div>
+							<h2>Business Workflow</h2>
+							<div class="muted">Run one business story live: Pi uses free web search on Temporal-owned customer-story pages, then generates side-by-side marketing HTML.</div>
+						</div>
+					</div>
+					<div class="section-title">Storyline controls</div>
+					<div class="toolbar">
+						<button id="checkPi">1. Check Pi + LLM</button>
+						<button id="runReactHarness">2. ReAct baseline</button>
+						<button id="runCodeActHarness" class="secondary">3. CodeAct + Temporal</button>
+						<button id="runHarnessCompare" class="primary">4. Compare marketing pages</button>
+						<button id="openArtifacts">5. Open artifacts</button>
+					</div>
+					<div id="piHealth"></div>
+					<div id="run"></div>
+					<div id="harnessRun"></div>
+				</section>
+			</section>
+		</main>
+		<script>
+			if (window.location.protocol === "file:") {
+				document.body.innerHTML = `
+					<main style="min-height: 100vh; display: grid; place-items: center; padding: 24px; font: 14px/1.45 system-ui, sans-serif;">
+						<section style="max-width: 560px; border: 1px solid #d8e0ea; border-radius: 8px; padding: 20px; background: #fff;">
+							<h1 style="margin: 0 0 8px; font-size: 18px;">Open the backend URL</h1>
+							<p style="margin: 0 0 12px; color: #607083;">This demo must be served by the local Node backend so Temporal, Pi, policy signals, and artifacts can work.</p>
+							<p style="margin: 0;"><a href="http://localhost:8787/">http://localhost:8787/</a></p>
+						</section>
+					</main>
+				`;
+				window.setTimeout(() => {
+					window.location.href = "http://localhost:8787/";
+				}, 500);
+			}
+
+			let scenarios = [];
+			let agentLadder = [];
+			let selectedScenario = "temporal-case-study-marketing-page";
+			let selectedExecutionMode = "harness";
+			let selectedReliabilityMode = "recoverable-failures";
+			let selectedSnippetIndex = 0;
+			let currentRun;
+			let seenPromptForRun;
+			let harnessRun;
+			let piHealth;
+			let workerBoard;
+			const workerStates = new Map();
+
+			const modeHints = {
+				workflow: "Workflow mode selected. Start a run to stream Temporal state changes.",
+				agent: "Agent mode selected. Generate with Pi to stream LLM output after the workflow prepares context.",
+				harness: "Harness mode selected. Choose ReAct for the LLM-selected strategy or CodeAct for generated code, a Python Temporal worker, and a Cloud workflow.",
+			};
+			const reliabilityHints = {
+				"recoverable-failures": "Error-prone demo mode is enabled: retryable external failures are expected and should recover.",
+				"random-chaos": "Activities and Pi calls may fail unpredictably; retries preserve workflow state.",
+				"clean-run": "Runs the happy path without simulated external failures.",
+				"permanent-failure": "Fails preparation with a non-retryable external error.",
+			};
+
+			async function api(path, options) {
+				const response = await fetch(path, {
+					headers: { "content-type": "application/json" },
+					...options,
+					body: options?.body ? JSON.stringify(options.body) : undefined,
+				});
+				if (!response.ok) throw new Error((await response.json()).error || response.statusText);
+				return response.json();
+			}
+
+			async function load() {
+				const runtime = await api("/api/runtime").catch(() => ({ mode: "setup-needed" }));
+				document.getElementById("connection").textContent = runtime.mode === "temporal-cloud"
+					? "Temporal Cloud connected"
+					: "Local fixture mode";
+				scenarios = await api("/api/scenarios");
+				agentLadder = await api("/api/agent-ladder");
+				renderScenarioSelect();
+				renderExecutionMode();
+				renderReliabilityMode();
+				renderSnippetReference();
+				renderPiHealth();
+				renderRun();
+			}
+
+			function renderScenarioSelect() {
+				const select = document.getElementById("scenarioSelect");
+				select.innerHTML = scenarios.map((scenario) => `
+					<option value="${escapeHtml(scenario.id)}">${escapeHtml(scenario.title)}</option>
+				`).join("");
+				select.value = selectedScenario;
+				const scenario = scenarios.find((candidate) => candidate.id === selectedScenario);
+				document.getElementById("scenarioHint").textContent = scenario?.shortDescription || "";
+			}
+
+			function renderExecutionMode() {
+				document.getElementById("executionMode").value = selectedExecutionMode;
+				document.getElementById("executionModeHint").textContent = modeHints[selectedExecutionMode];
+				document.getElementById("modeHint").textContent = modeHints[selectedExecutionMode];
+			}
+
+			function renderReliabilityMode() {
+				const select = document.getElementById("reliabilityMode");
+				select.value = selectedReliabilityMode;
+				document.getElementById("reliabilityHint").textContent = reliabilityHints[selectedReliabilityMode];
+			}
+
+			function renderRun() {
+				const root = document.getElementById("run");
+				if (!currentRun) {
+					root.innerHTML = `
+						<div class="stage-card">
+							<h2>Ready for live execution</h2>
+							<div class="muted">Run the story in order: baseline ReAct, CodeAct with Temporal primitives, compare the marketing pages, then inspect artifacts.</div>
+							<div class="step-strip">
+								<div class="step"><strong>1. Check</strong>Confirm Pi and the LLM path.</div>
+								<div class="step"><strong>2. ReAct</strong>Parallel-minded target and strategy.</div>
+								<div class="step"><strong>3. CodeAct</strong>Generated Temporal code and parallel extraction.</div>
+								<div class="step"><strong>4. Compare</strong>Side-by-side customer-proof marketing pages.</div>
+							</div>
+						</div>
+					`;
+					return;
+				}
+				root.innerHTML = `
+					<div class="workflow-card">
+						<h2>${escapeHtml(currentRun.title)}</h2>
+						<p><span class="status">${escapeHtml(currentRun.phase)}</span> <span class="muted">${escapeHtml(currentRun.runId)}</span></p>
+						<p class="muted">Reliability: ${escapeHtml(currentRun.reliabilityMode || "clean-run")}</p>
+						<h3>Temporal Timeline</h3>
+						<ul class="timeline">${currentRun.timeline.map((event) => `<li><strong>${escapeHtml(event.message)}</strong><br><span class="muted">${escapeHtml(event.at)}</span></li>`).join("")}</ul>
+						${currentRun.recoveryEvents?.length ? `
+							<h3>Recovery Events</h3>
+							<ul class="timeline">${currentRun.recoveryEvents.map((event) => `
+								<li>
+									<strong>${escapeHtml(event.system)} recovered on attempt ${escapeHtml(event.recoveredOnAttempt)}</strong><br>
+									<span class="muted">${escapeHtml(event.failure)} · ${escapeHtml(event.temporalHelp)}</span>
+								</li>
+							`).join("")}</ul>
+						` : ""}
+						${currentRun.failure ? `<p class="status">${escapeHtml(currentRun.failure)}</p>` : ""}
+						${currentRun.policyInspections?.length ? `
+							<h3>Policy State</h3>
+							<ul class="timeline">${currentRun.policyInspections.map((inspection) => `
+								<li>
+									<strong>${escapeHtml(inspection.id)} · ${escapeHtml(inspection.status)} · ${escapeHtml(inspection.policyId)}</strong><br>
+									<span class="muted">${escapeHtml(inspection.recommendation)}</span>
+								</li>
+							`).join("")}</ul>
+						` : ""}
+						${currentRun.agentHandshakes?.length ? `
+							<h3>Agent Handshakes</h3>
+							<ul class="timeline">${currentRun.agentHandshakes.map((handshake) => `
+								<li>
+									<strong>${escapeHtml(handshake.fromAgent)} -> ${escapeHtml(handshake.toAgent)} · ${escapeHtml(handshake.status)}</strong><br>
+									<span class="muted">${escapeHtml(handshake.summary)}</span>
+								</li>
+							`).join("")}</ul>
+						` : ""}
+						<div class="detail-grid">
+							<section>
+								<h3>Prepared Context</h3>
+								${currentRun.promptPack ? `
+									<details>
+										<summary>Show prompt pack generated by the workflow</summary>
+										<pre>${escapeHtml(currentRun.promptPack.prompt)}</pre>
+									</details>
+								` : `<p class="muted">Waiting for workflow preparation.</p>`}
+							</section>
+							<section>
+								<h3>Draft Artifact</h3>
+								${currentRun.piOutput ? `<pre>${escapeHtml(currentRun.piOutput.markdown)}</pre>` : `<p class="muted">No Pi output submitted yet.</p>`}
+								<h3>Export</h3>
+								<p>${currentRun.artifact ? escapeHtml(currentRun.artifact.relativePath) : "Not exported yet."}</p>
+							</section>
+						</div>
+					</div>
+				`;
+			}
+
+			function renderHarnessRun() {
+				const root = document.getElementById("harnessRun");
+				if (!harnessRun) {
+					root.innerHTML = "";
+					return;
+				}
+				const allArtifacts = harnessRun.results.flatMap((result) => result.artifacts || []);
+				const htmlArtifacts = allArtifacts.filter((artifact) => artifact.relativePath.endsWith(".html"));
+				const cloudRuns = harnessRun.results
+					.map((result) => result.codeActTemporalCloud)
+					.filter(Boolean);
+				root.innerHTML = `
+					<div class="workflow-card">
+						<h2>Agent Harness Run</h2>
+						<p>
+							<span class="status">${escapeHtml(harnessRun.runId)}</span>
+							${harnessRun.reportViewUrl ? `<a href="${escapeHtml(harnessRun.reportViewUrl)}" target="_blank" rel="noreferrer">Open harness report</a>` : ""}
+							<span class="muted">${escapeHtml(harnessRun.reportPath)}</span>
+						</p>
+						${harnessRun.comparisonPath ? `<p><a href="${escapeHtml(harnessRun.comparisonViewUrl || "#")}" target="_blank" rel="noreferrer">Open comparison report</a> <span class="muted">${escapeHtml(harnessRun.comparisonPath)}</span></p>` : ""}
+						<div class="harness-summary">
+							${harnessRun.results.map((result) => `
+								<div class="step">
+									<strong>${escapeHtml(result.title)}</strong>
+									${escapeHtml(result.events.length)} events · ${escapeHtml(result.toolCalls.length)} tool calls · ${escapeHtml(result.artifacts.length)} artifacts
+								</div>
+							`).join("")}
+						</div>
+						${cloudRuns.length ? `
+							<h3>Generated CodeAct Temporal Cloud workflow</h3>
+							<ul class="artifact-list">
+								${cloudRuns.map((cloudRun) => `
+									<li>
+										<strong>${escapeHtml(cloudRun.workflowId || "not started")}</strong>
+										<div class="muted">Workflow type: ${escapeHtml(cloudRun.workflowType)} · Task queue: ${escapeHtml(cloudRun.taskQueue)} · Status: ${escapeHtml(cloudRun.status)}</div>
+										<div class="muted">Activities: ${escapeHtml((cloudRun.activities || []).join(", "))}</div>
+										${typeof cloudRun.records === "number" ? `<div class="muted">Records: ${escapeHtml(cloudRun.records)} · Attempted: ${escapeHtml(cloudRun.attempted ?? 0)} · Failures: ${escapeHtml(cloudRun.failures ?? 0)}</div>` : ""}
+									</li>
+								`).join("")}
+							</ul>
+						` : ""}
+						${htmlArtifacts.length ? `
+							<h3>HTML outputs</h3>
+							<ul class="artifact-list">
+								${htmlArtifacts.map((artifact) => `
+									<li>
+										<a href="${escapeHtml(artifact.viewUrl || "#")}" target="_blank" rel="noreferrer">${escapeHtml(artifact.relativePath)}</a>
+										<div class="muted">${escapeHtml(artifact.purpose)}</div>
+									</li>
+								`).join("")}
+							</ul>
+						` : ""}
+						${allArtifacts.length ? `
+							<h3>Artifacts</h3>
+							<ul class="artifact-list">
+								${allArtifacts.map((artifact) => `
+									<li>
+										${artifact.viewUrl ? `<a href="${escapeHtml(artifact.viewUrl)}" target="_blank" rel="noreferrer">${escapeHtml(artifact.relativePath)}</a>` : escapeHtml(artifact.relativePath)}
+										<div class="muted">${escapeHtml(artifact.purpose)}</div>
+									</li>
+								`).join("")}
+							</ul>
+						` : ""}
+					</div>
+				`;
+			}
+
+			function renderPiHealth() {
+				const root = document.getElementById("piHealth");
+				if (!piHealth) {
+					root.innerHTML = `
+						<div class="health-card">
+							<strong>Pi runtime status</strong>
+							<div class="muted">Not checked yet. Click Check Pi + LLM before the live generation step.</div>
+						</div>
+					`;
+					return;
+				}
+				root.innerHTML = `
+					<div class="health-card ${piHealth.ok ? "ready" : "error"}">
+						<strong>Pi runtime status: ${piHealth.ok ? "Ready" : "Needs attention"}</strong>
+						<div>${escapeHtml(piHealth.commandLabel)}</div>
+						<div class="muted">${escapeHtml(piHealth.message)}</div>
+					</div>
+				`;
+			}
+
+			async function refreshRun() {
+				if (!currentRun?.runId) return;
+				const runs = await api("/api/runs").catch(() => []);
+				const nextRun = runs.find((run) => run.runId === currentRun.runId);
+				if (!nextRun) return;
+				currentRun = nextRun;
+				renderRun();
+				if (currentRun.promptPack && seenPromptForRun !== currentRun.runId) {
+					seenPromptForRun = currentRun.runId;
+					await streamDevEntry("prompt", "Temporal prepared prompt pack", currentRun.promptPack.prompt);
+				}
+			}
+
+			function setExecutionMode(mode) {
+				selectedExecutionMode = mode;
+				renderExecutionMode();
+				appendDevEntry("mode", "Execution mode selected", modeHints[mode]);
+			}
+
+			function clearStream() {
+				document.getElementById("devStream").innerHTML = `
+					<div class="stream-empty">Stream cleared. Run a workflow, Pi generation, or harness to show live output.</div>
+				`;
+				workerBoard = undefined;
+				workerStates.clear();
+			}
+
+			function appendDevEntry(kind, title, content, options = {}) {
+				const stream = document.getElementById("devStream");
+				const empty = stream.querySelector(".stream-empty");
+				if (empty) empty.remove();
+				const entry = document.createElement("article");
+				entry.className = "stream-entry";
+				const header = document.createElement("header");
+				header.innerHTML = `<strong>${escapeHtml(kind)}</strong><span>${escapeHtml(title)}</span>`;
+				const body = document.createElement(options.code ? "pre" : "div");
+				body.className = options.code ? "" : "stream-text";
+				if (options.code) {
+					body.dataset.rawText = content || "";
+					body.dataset.syntaxLanguage = options.language || "auto";
+					body.dataset.codeLabel = `${kind} ${title}`;
+					renderCodeBody(body);
+				} else {
+					body.textContent = content || "";
+				}
+				entry.append(header, body);
+				stream.append(entry);
+				stream.scrollTop = stream.scrollHeight;
+				return body;
+			}
+
+			async function streamDevEntry(kind, title, content) {
+				const body = appendDevEntry(kind, title, "", { code: true });
+				const lines = String(content || "").split("\n");
+				for (const line of lines) {
+					appendCodeText(body, `${line}\n`);
+					body.parentElement.scrollIntoView({ block: "end" });
+					await delay(Math.min(28, Math.max(4, 260 / Math.max(line.length, 12))));
+				}
+				renderCodeBody(body);
+			}
+
+			function piToolCallPreview() {
+				const scenario = scenarios.find((candidate) => candidate.id === (currentRun?.scenarioId || selectedScenario));
+				const skillName = scenario?.skillName || selectedScenario;
+				return [
+					"tool: bash",
+					"cwd: repository root",
+					"",
+					"command:",
+					"$PI_COMMAND \\",
+					"  --mode json \\",
+					"  --no-session \\",
+					"  --tools free_web_search,free_fetch_content \\",
+					`  --skill skills/${skillName}/SKILL.md \\`,
+					'  "<Temporal-prepared prompt pack with zero preloaded discovered URLs>"',
+					"",
+					"env:",
+					"ANTHROPIC_API_KEY=[set, not shown]",
+					"TEMPORAL_*=[not passed to Pi prompt]",
+					"",
+					"exit condition:",
+					"1. Pi emits a final assistant message in JSON mode.",
+					"2. Backend extracts assistant markdown from stdout.",
+					"3. Backend signals Temporal with submitPiOutputSignal.",
+					"4. Workflow reaches waiting_for_approval.",
+					"",
+					"policy/handshake step:",
+					"inspectPolicySignal requests a durable policy-state snapshot.",
+					"agentHandshakeSignal records the case-study research agent -> policy agent handoff.",
+					"demoStateQuery reads the resulting policy and handshake state.",
+					"",
+					"runtime check:",
+					piHealth
+						? `${piHealth.ok ? "ready" : "not ready"} — ${piHealth.commandLabel}: ${piHealth.message}`
+						: "not checked yet",
+				].join("\n");
+			}
+
+			const harnessButtons = {
+				react: { id: "runReactHarness", running: "Streaming ReAct...", idle: "2. ReAct baseline" },
+				codeact: { id: "runCodeActHarness", running: "Streaming CodeAct...", idle: "3. CodeAct + Temporal" },
+				all: { id: "runHarnessCompare", running: "Streaming Comparison...", idle: "4. Compare marketing pages" },
+			};
+
+			async function streamHarness(agentMode) {
+				setExecutionMode("harness");
+				const buttonConfig = harnessButtons[agentMode];
+				const button = document.getElementById(buttonConfig.id);
+				setHarnessButtonsDisabled(true);
+				button.textContent = buttonConfig.running;
+				document.getElementById("streamStatus").textContent = "Streaming";
+				workerBoard = undefined;
+				workerStates.clear();
+				appendDevEntry("harness", harnessRunTitle(agentMode), harnessRunDescription(agentMode));
+				try {
+					const response = await fetch("/api/harness-runs/stream", {
+						method: "POST",
+						headers: { "content-type": "application/json" },
+						body: JSON.stringify({ agent: agentMode }),
+					});
+					if (!response.ok || !response.body) throw new Error("Harness stream failed");
+					const reader = response.body.getReader();
+					const decoder = new TextDecoder();
+					let buffer = "";
+					for (;;) {
+						const { value, done } = await reader.read();
+						if (done) break;
+						buffer += decoder.decode(value, { stream: true });
+						const lines = buffer.split("\n");
+						buffer = lines.pop() || "";
+						for (const line of lines) {
+							if (!line.trim()) continue;
+							handleHarnessEvent(JSON.parse(line));
+						}
+					}
+					if (buffer.trim()) handleHarnessEvent(JSON.parse(buffer));
+				} catch (error) {
+					appendDevEntry("error", "Harness stream failed", error.message);
+				} finally {
+					button.textContent = buttonConfig.idle;
+					setHarnessButtonsDisabled(false);
+					document.getElementById("streamStatus").textContent = "Idle";
+				}
+			}
+
+			function setHarnessButtonsDisabled(disabled) {
+				for (const config of Object.values(harnessButtons)) {
+					const button = document.getElementById(config.id);
+					if (button) button.disabled = disabled;
+				}
+			}
+
+			function harnessRunTitle(agentMode) {
+				if (agentMode === "react") return "Starting ReAct harness";
+				if (agentMode === "codeact") return "Starting CodeAct harness";
+				return "Starting ReAct vs CodeAct comparison";
+			}
+
+			function harnessRunDescription(agentMode) {
+				if (agentMode === "react") {
+					return "ReAct streams the classic reason-act-observe loop: Pi searches, creates a concise parallel branch plan, then chooses a bounded target count, page budget, and concurrency, then the harness fetches and extracts Temporal customer-story evidence until the selected budget or exit condition is reached.";
+				}
+				if (agentMode === "codeact") {
+					return "CodeAct shows Pi-generated Python Temporal scaffold code first, starts the generated Python worker/workflow in Temporal Cloud when configured, then streams the workflow ID, activity names, and extracted customer-story facts.";
+				}
+				return "Runs Simple, LLM-selected ReAct, and CodeAct together. ReAct streams individual search/fetch actions. CodeAct shows generated Temporal code plus a generated Python Temporal Cloud workflow, then the harness exports the comparison report.";
+			}
+
+			async function streamPiGeneration() {
+				if (!currentRun) return;
+				setExecutionMode("agent");
+				if (!piHealth || !piHealth.ok) {
+					await checkPiHealth();
+				}
+				if (!piHealth?.ok) {
+					appendDevEntry("error", "Pi runtime is not ready", piHealth?.message || "Pi smoke check failed.");
+					return;
+				}
+				const button = document.getElementById("generatePi");
+				button.textContent = "Streaming Pi...";
+				button.disabled = true;
+				document.getElementById("streamStatus").textContent = "Streaming Pi text";
+				appendDevEntry(
+					"user",
+					"Instruction to agent",
+					"Use the selected case-study research skill and Temporal-prepared context to produce the final draft plus marketing HTML artifact.",
+				);
+				appendDevEntry("tool call", "Pi CLI invocation", piToolCallPreview(), { code: true });
+				const llmBody = appendDevEntry("llm", "Pi generated text streaming from stdout", "", { code: true });
+				try {
+					const response = await fetch(`/api/runs/${currentRun.runId}/generate-stream`, {
+						method: "POST",
+						headers: { "content-type": "application/json" },
+						body: JSON.stringify({ mode: "pi" }),
+					});
+					if (!response.ok || !response.body) throw new Error("Pi stream failed");
+					const reader = response.body.getReader();
+					const decoder = new TextDecoder();
+					let buffer = "";
+					for (;;) {
+						const { value, done } = await reader.read();
+						if (done) break;
+						buffer += decoder.decode(value, { stream: true });
+						const lines = buffer.split("\n");
+						buffer = lines.pop() || "";
+						for (const line of lines) {
+							if (!line.trim()) continue;
+							handlePiStreamEvent(JSON.parse(line), llmBody);
+						}
+					}
+					if (buffer.trim()) handlePiStreamEvent(JSON.parse(buffer), llmBody);
+				} catch (error) {
+					appendDevEntry("error", "Pi invocation failed", error.message);
+				} finally {
+					button.textContent = "2. Stream Pi Generation";
+					button.disabled = false;
+					document.getElementById("streamStatus").textContent = "Idle";
+				}
+			}
+
+			async function checkPiHealth() {
+				const button = document.getElementById("checkPi");
+				button.textContent = "Checking Pi...";
+				button.disabled = true;
+				document.getElementById("streamStatus").textContent = "Checking Pi";
+				try {
+					piHealth = await api("/api/pi-health?smoke=1");
+					renderPiHealth();
+					appendDevEntry(
+						piHealth.ok ? "check" : "error",
+						"Pi CLI + LLM smoke check",
+						`${piHealth.commandLabel}\n${piHealth.message}`,
+					);
+				} catch (error) {
+					piHealth = { ok: false, commandLabel: "Pi smoke check failed", message: error.message };
+					renderPiHealth();
+					appendDevEntry("error", "Pi CLI + LLM smoke check failed", error.message);
+				} finally {
+					button.textContent = "1. Check Pi + LLM";
+					button.disabled = false;
+					document.getElementById("streamStatus").textContent = "Idle";
+				}
+			}
+
+			function handlePiStreamEvent(event, llmBody) {
+				if (event.type === "start") {
+					appendDevEntry("process", "Pi process started", `workflowId=${event.workflowId}`);
+					return;
+				}
+				if (event.type === "heartbeat") {
+					document.getElementById("streamStatus").textContent = "Streaming";
+					return;
+				}
+				if (event.type === "prompt_pack") {
+					appendDevEntry(
+						"prompt",
+						`Pi prompt actually sent (${event.promptCharacters} chars, ${event.preloadedDiscoveredUrls} preloaded URLs, ${event.preloadedExtractedRecords} preloaded records)`,
+						event.prompt,
+						{ code: true },
+					);
+					return;
+				}
+				if (event.type === "pi") {
+					handlePiCliEvent(event.event, llmBody);
+					return;
+				}
+				if (event.type === "temporal_signal_start") {
+					appendDevEntry("signal", "Sending output back to Temporal", event.signal);
+					return;
+				}
+				if (event.type === "temporal_state" || event.type === "done") {
+					currentRun = event.state;
+					renderRun();
+					if (event.type === "done") {
+						appendDevEntry(
+							"exit",
+							"Agent step exit condition met",
+							"Pi returned final assistant output, the backend signaled Temporal, and the workflow is now waiting for human approval.",
+						);
+					}
+					return;
+				}
+				if (event.type === "error") {
+					appendDevEntry("error", "Pi stream error", event.message);
+				}
+			}
+
+			function handlePiCliEvent(event, llmBody) {
+				if (event.type === "assistant_delta") {
+					llmBody.dataset.hasDelta = "true";
+					appendCodeText(llmBody, event.delta);
+					llmBody.parentElement.scrollIntoView({ block: "end" });
+					return;
+				}
+				if (event.type === "assistant_final") {
+					if (llmBody.dataset.hasDelta !== "true") {
+						setCodeText(llmBody, event.markdown || "");
+					}
+					renderCodeBody(llmBody);
+					return;
+				}
+				if (event.type === "tool_start") {
+					appendDevEntry("tool", `Pi tool start: ${event.toolName}`, JSON.stringify(event.args, null, 2), { code: true });
+					return;
+				}
+				if (event.type === "tool_update") {
+					appendDevEntry("tool", `Pi tool update: ${event.toolName}`, JSON.stringify(event.partialResult, null, 2), { code: true });
+					return;
+				}
+				if (event.type === "tool_end") {
+					appendDevEntry(
+						event.isError ? "tool error" : "observation",
+						`Pi tool end: ${event.toolName}`,
+						JSON.stringify(event.result, null, 2),
+						{ code: true },
+					);
+					return;
+				}
+				if (event.type === "stderr" && event.text.trim()) {
+					appendDevEntry("stderr", "Pi process stderr", event.text, { code: true });
+					return;
+				}
+				if (event.type === "stdout" && event.text.trim()) {
+					appendDevEntry("stdout", "Pi process stdout", event.text, { code: true });
+				}
+			}
+
+			function handleHarnessEvent(event) {
+				if (event.type === "run-start") {
+					appendDevEntry("run", "Harness run started", event.runId);
+					return;
+				}
+				if (event.type === "heartbeat") {
+					document.getElementById("streamStatus").textContent = "Streaming";
+					return;
+				}
+				if (event.type === "agent-start") {
+					appendDevEntry("agent", `${event.agent} started`, `Agent = LLM + tools in a loop with an exit condition. Current loop: ${event.agent}.`);
+					return;
+				}
+				if (event.type === "event") {
+					appendDevEntry(event.event.kind, `${event.event.agent}`, event.event.message);
+					return;
+				}
+				if (event.type === "tool") {
+					const title = `${event.toolCall.agent} tool: ${event.toolCall.tool} ${event.toolCall.input}`;
+					if (event.toolCall.tool === "llm_output_rejected") {
+						appendDevEntry("rejected scaffold", title, event.toolCall.output);
+						return;
+					}
+					const kind = event.toolCall.agent === "codeact" && event.toolCall.tool === "write_file"
+						? "generated code"
+						: "tool";
+					const displayTitle = event.toolCall.agent === "codeact" && event.toolCall.tool === "write_file"
+						? `Pi generated CodeAct file: ${event.toolCall.input}`
+						: title;
+					appendDevEntry(kind, displayTitle, event.toolCall.output, { code: true });
+					return;
+				}
+				if (event.type === "worker") {
+					renderWorkerLane(event.worker);
+					return;
+				}
+				if (event.type === "artifact") {
+					appendDevEntry("artifact", "Generated file", `${event.artifact.relativePath}\n${event.artifact.purpose || ""}`);
+					return;
+				}
+				if (event.type === "agent-complete") {
+					appendDevEntry("result", `${event.result.title} complete`, event.result.summary);
+					if (event.result.codeActTemporalCloud) {
+						appendDevEntry(
+							"workflow",
+							"Generated CodeAct Temporal Cloud workflow",
+							renderCodeActCloudRun(event.result.codeActTemporalCloud),
+							{ code: true },
+						);
+					}
+					return;
+				}
+				if (event.type === "run-complete") {
+					harnessRun = event.result;
+					renderHarnessRun();
+					appendHarnessCompletionSummary(event.result);
+					return;
+				}
+				if (event.type === "error") {
+					appendDevEntry("error", "Harness error", event.message);
+				}
+			}
+
+			function appendHarnessCompletionSummary(result) {
+				const artifacts = result.results.flatMap((agentResult) => agentResult.artifacts || []);
+				const htmlArtifacts = artifacts.filter((artifact) => artifact.relativePath.endsWith(".html"));
+				const cloudRuns = result.results.map((agentResult) => agentResult.codeActTemporalCloud).filter(Boolean);
+				const modes = result.results.map((agentResult) => agentResult.mode).join(", ");
+				const lines = [
+					`Run complete: ${result.runId}`,
+					`Modes completed: ${modes || "none"}`,
+					`Harness report: ${result.reportPath}`,
+					result.reportViewUrl ? `Open report: ${result.reportViewUrl}` : undefined,
+					...(cloudRuns.length
+						? [
+								"",
+								"Generated CodeAct Temporal Cloud workflows:",
+								...cloudRuns.map((cloudRun) => `- ${cloudRun.workflowId || "not-started"} (${cloudRun.status}) activities: ${(cloudRun.activities || []).join(", ")}`),
+							]
+						: []),
+					result.comparisonPath
+						? `Comparison report: ${result.comparisonPath}`
+						: "No comparison report was generated because this was not a ReAct + CodeAct comparison run.",
+					"",
+					"HTML outputs:",
+					...(htmlArtifacts.length
+						? htmlArtifacts.map((artifact) => `- ${artifact.relativePath}${artifact.viewUrl ? ` (${artifact.viewUrl})` : ""}`)
+						: ["- none"]),
+					"",
+					"Open the right-side Harness Run panel or click 5. Open artifacts to inspect generated code, HTML, citations, and reports.",
+				].filter((line) => line !== undefined);
+				appendDevEntry("complete", "Harness run complete", lines.join("\n"));
+			}
+
+			function renderCodeActCloudRun(cloudRun) {
+				return JSON.stringify(
+					{
+						workflowId: cloudRun.workflowId,
+						workflowType: cloudRun.workflowType,
+						taskQueue: cloudRun.taskQueue,
+						status: cloudRun.status,
+						activities: cloudRun.activities,
+						records: cloudRun.records,
+						attempted: cloudRun.attempted,
+						failures: cloudRun.failures,
+						message: cloudRun.message,
+					},
+					null,
+					2,
+				);
+			}
+
+			function renderWorkerLane(worker) {
+				if (worker.agent !== "codeact") return;
+				workerStates.set(worker.workerId, worker);
+				const board = ensureWorkerBoard();
+				board.innerHTML = Array.from(workerStates.values()).map((state) => `
+					<section class="worker-card">
+						<strong>${escapeHtml(state.workerId)}</strong>
+						<span class="worker-phase ${escapeHtml(state.phase)}">${escapeHtml(state.phase)}</span>
+						<p>${escapeHtml(state.message)}</p>
+						${state.url ? `<div class="worker-url">${escapeHtml(state.url)}</div>` : ""}
+						${typeof state.records === "number" || typeof state.failures === "number" ? `
+							<div class="worker-url">records=${escapeHtml(state.records ?? 0)} failures=${escapeHtml(state.failures ?? 0)}</div>
+						` : ""}
+					</section>
+				`).join("");
+				board.parentElement.scrollIntoView({ block: "end" });
+			}
+
+			function ensureWorkerBoard() {
+				if (workerBoard) return workerBoard;
+				const stream = document.getElementById("devStream");
+				const empty = stream.querySelector(".stream-empty");
+				if (empty) empty.remove();
+				const entry = document.createElement("article");
+				entry.className = "stream-entry";
+				const header = document.createElement("header");
+				header.innerHTML = "<strong>parallel</strong><span>CodeAct generated-code worker lanes</span>";
+				const body = document.createElement("div");
+				body.className = "worker-grid";
+				entry.append(header, body);
+				stream.append(entry);
+				workerBoard = body;
+				return body;
+			}
+
+			function renderSnippetReference() {
+				const codeAct = agentLadder.find((agent) => agent.id === "codeact");
+				const snippets = codeAct?.snippets || [];
+				document.getElementById("snippetTabs").innerHTML = snippets.map((snippet, index) => `
+					<button class="snippet-tab ${index === selectedSnippetIndex ? "active" : ""}" data-snippet-index="${index}">${escapeHtml(snippet.title)}</button>
+				`).join("");
+				document.getElementById("snippetCode").innerHTML = renderHighlightedCode(
+					snippets[selectedSnippetIndex]?.code || "",
+					"auto",
+					snippets[selectedSnippetIndex]?.title || "reference snippet",
+				);
+				document.querySelectorAll("[data-snippet-index]").forEach((button) => {
+					button.onclick = () => {
+						selectedSnippetIndex = Number(button.dataset.snippetIndex);
+						renderSnippetReference();
+					};
+				});
+			}
+
+			function escapeHtml(value) {
+				return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
+			}
+
+			const temporalPrimitiveTokens = [
+				"workflow.execute_activity",
+				"workflow.wait_condition",
+				"return_exceptions=True",
+				"client.start_workflow",
+				"@workflow.defn",
+				"@workflow.signal",
+				"@workflow.query",
+				"@workflow.run",
+				"@activity.defn",
+				"asyncio.gather",
+				"RetryPolicy",
+				"ApplicationError",
+				"pause_for_review",
+				"approve_export",
+				"current_state",
+				"Worker(",
+			];
+
+			function setCodeText(element, value) {
+				element.dataset.rawText = String(value || "");
+				renderCodeBody(element);
+			}
+
+			function appendCodeText(element, value) {
+				element.dataset.rawText = `${element.dataset.rawText || ""}${value || ""}`;
+				renderCodeBody(element);
+			}
+
+			function renderCodeBody(element) {
+				const rawText = element.dataset.rawText || "";
+				const languageHint = element.dataset.syntaxLanguage || "auto";
+				const label = element.dataset.codeLabel || "";
+				const inferredLanguage = languageHint === "auto" ? inferCodeLanguage(rawText, label) : languageHint;
+				const formatted = formatCodeForDisplay(rawText, inferredLanguage, label);
+				element.className = `code-block language-${formatted.language}`;
+				element.innerHTML = renderHighlightedCode(formatted.text, formatted.language, label);
+			}
+
+			function renderHighlightedCode(value, languageHint = "auto", label = "") {
+				const rawText = String(value || "");
+				const language = languageHint === "auto" ? inferCodeLanguage(rawText, label) : languageHint;
+				const lines = rawText.split("\n");
+				return lines
+					.map((line, index) => {
+						const highlighted = highlightCodeLine(line, language) || "&nbsp;";
+						return `<span class="code-line"><span class="line-no">${index + 1}</span><span class="line-code">${highlighted}</span></span>`;
+					})
+					.join("");
+			}
+
+			function highlightCodeLine(line, language) {
+				return splitTemporalPrimitiveSegments(line)
+					.map((segment) => {
+						if (segment.primitive) {
+							return `<mark class="temporal-primitive">${escapeHtml(segment.text)}</mark>`;
+						}
+						return highlightSyntax(segment.text, language);
+					})
+					.join("");
+			}
+
+			function formatCodeForDisplay(value, language, label = "") {
+				const rawText = String(value || "");
+				const lowerLabel = String(label || "").toLowerCase();
+				const parsed = tryParseJsonObject(rawText);
+				if (
+					parsed &&
+					(lowerLabel.includes("codeact-temporal-python-scaffold") ||
+						lowerLabel.includes("codeact-temporal-bash-scaffold")) &&
+					Array.isArray(parsed.files)
+				) {
+					const files = parsed.files
+						.filter((file) => file && typeof file.path === "string" && typeof file.contents === "string")
+						.map((file) => [`# ${file.path}`, file.contents.trimEnd()].join("\n"));
+					if (files.length > 0) return { text: files.join("\n\n"), language: "python" };
+				}
+				if (language === "json" && parsed) {
+					return { text: JSON.stringify(parsed, null, 2), language };
+				}
+				if (language === "html") {
+					return { text: formatHtmlForDisplay(rawText), language };
+				}
+				return { text: rawText, language };
+			}
+
+			function tryParseJsonObject(value) {
+				const raw = String(value || "").trim();
+				if (!raw) return undefined;
+				const fenced = /```json\s*([\s\S]*?)```/i.exec(raw)?.[1]?.trim();
+				const candidate = fenced || raw;
+				const start = candidate.indexOf("{");
+				const end = candidate.lastIndexOf("}");
+				if (start < 0 || end < start) return undefined;
+				try {
+					return JSON.parse(candidate.slice(start, end + 1));
+				} catch {
+					return undefined;
+				}
+			}
+
+			function formatHtmlForDisplay(value) {
+				const compact = String(value || "").trim();
+				if (!compact || compact.includes("\n")) return compact;
+				let depth = 0;
+				return compact
+					.replace(/></g, ">\n<")
+					.split("\n")
+					.map((line) => {
+						const trimmed = line.trim();
+						if (/^<\/[^>]+>/.test(trimmed)) depth = Math.max(0, depth - 1);
+						const formatted = `${"  ".repeat(depth)}${trimmed}`;
+						if (/^<[^!?/][^>]*[^/]>\s*$/.test(trimmed) && !/^<(area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr)\b/i.test(trimmed)) {
+							depth += 1;
+						}
+						return formatted;
+					})
+					.join("\n");
+			}
+
+			function splitTemporalPrimitiveSegments(value) {
+				const ranges = [];
+				for (const token of temporalPrimitiveTokens) {
+					let index = value.indexOf(token);
+					while (index !== -1) {
+						ranges.push({ start: index, end: index + token.length });
+						index = value.indexOf(token, index + token.length);
+					}
+				}
+				ranges.sort((a, b) => a.start - b.start || b.end - b.start - (a.end - a.start));
+				const selectedRanges = [];
+				let cursor = 0;
+				for (const range of ranges) {
+					if (range.start < cursor) continue;
+					selectedRanges.push(range);
+					cursor = range.end;
+				}
+				const segments = [];
+				cursor = 0;
+				for (const range of selectedRanges) {
+					if (range.start > cursor) {
+						segments.push({ text: value.slice(cursor, range.start), primitive: false });
+					}
+					segments.push({ text: value.slice(range.start, range.end), primitive: true });
+					cursor = range.end;
+				}
+				if (cursor < value.length) {
+					segments.push({ text: value.slice(cursor), primitive: false });
+				}
+				return segments;
+			}
+
+			function inferCodeLanguage(value, label = "") {
+				const text = String(value || "");
+				const lowerLabel = String(label || "").toLowerCase();
+				const trimmed = text.trim();
+				if (lowerLabel.includes("pi cli") || lowerLabel.includes("command") || /^\s*(\$|npm |npx |python3 |pi |export )/m.test(text)) {
+					return "shell";
+				}
+				if (/^\s*[[{]/.test(trimmed)) {
+					return "json";
+				}
+				if (/^\s*<(!doctype|html|section|article|div|main|head|body)\b/i.test(trimmed)) {
+					return "html";
+				}
+				if (/@workflow\.|@activity\.|from temporalio|asyncio\.|^\s*(async\s+)?def\s+/m.test(text)) {
+					return "python";
+				}
+				if (/\b(const|let|function|await|async|interface|type)\b|=>/.test(text)) {
+					return "typescript";
+				}
+				if (/^#{1,6}\s|\n[-*]\s|```/.test(text)) {
+					return "markdown";
+				}
+				return "text";
+			}
+
+			function highlightSyntax(value, language) {
+				const rules = syntaxRulesFor(language);
+				if (!rules.length) return escapeHtml(value);
+				return highlightWithRules(value, rules);
+			}
+
+			function highlightWithRules(value, rules) {
+				let html = "";
+				let cursor = 0;
+				while (cursor < value.length) {
+					let bestMatch;
+					for (const rule of rules) {
+						const flags = rule.regex.flags.includes("g") ? rule.regex.flags : `${rule.regex.flags}g`;
+						const regex = new RegExp(rule.regex.source, flags);
+						regex.lastIndex = cursor;
+						const match = regex.exec(value);
+						if (!match || !match[0]) continue;
+						if (
+							!bestMatch ||
+							match.index < bestMatch.index ||
+							(match.index === bestMatch.index && rule.priority > bestMatch.priority)
+						) {
+							bestMatch = {
+								index: match.index,
+								text: match[0],
+								className: rule.className,
+								priority: rule.priority,
+							};
+						}
+					}
+					if (!bestMatch) {
+						html += escapeHtml(value.slice(cursor));
+						break;
+					}
+					html += escapeHtml(value.slice(cursor, bestMatch.index));
+					html += `<span class="${bestMatch.className}">${escapeHtml(bestMatch.text)}</span>`;
+					cursor = bestMatch.index + bestMatch.text.length;
+				}
+				return html;
+			}
+
+			function syntaxRulesFor(language) {
+				const commonStrings = /(?:[rubf]{0,3})("""[\s\S]*?"""|'''[\s\S]*?'''|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')/gi;
+				const jsStrings = /`(?:\\.|[^`\\])*`|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g;
+				if (language === "python") {
+					return [
+						rule("syntax-comment", /#[^\n]*/g, 20),
+						rule("syntax-string", commonStrings, 18),
+						rule("syntax-decorator", /@[A-Za-z_][\w.]*/g, 16),
+						rule(
+							"syntax-keyword",
+							/\b(async|await|class|def|return|if|elif|else|for|while|try|except|finally|raise|from|import|as|with|pass|break|continue|in|is|not|and|or|lambda|yield)\b/g,
+							12,
+						),
+						rule("syntax-boolean", /\b(True|False|None)\b/g, 11),
+						rule("syntax-builtin", /\b(str|int|float|list|dict|set|tuple|len|range|print|Exception)\b/g, 10),
+						rule("syntax-number", /\b\d+(?:\.\d+)?\b/g, 9),
+						rule("syntax-function", /\b[A-Za-z_][\w]*(?=\s*\()/g, 8),
+					];
+				}
+				if (language === "typescript") {
+					return [
+						rule("syntax-comment", /\/\/[^\n]*|\/\*[\s\S]*?\*\//g, 20),
+						rule("syntax-string", jsStrings, 18),
+						rule(
+							"syntax-keyword",
+							/\b(async|await|const|let|var|function|return|if|else|for|while|try|catch|finally|throw|new|class|extends|import|export|from|type|interface|as|of|in)\b/g,
+							12,
+						),
+						rule("syntax-boolean", /\b(true|false|null|undefined)\b/g, 11),
+						rule("syntax-number", /\b\d+(?:\.\d+)?\b/g, 9),
+						rule("syntax-function", /\b[A-Za-z_$][\w$]*(?=\s*\()/g, 8),
+					];
+				}
+				if (language === "json") {
+					return [
+						rule("syntax-property", /"(?:\\.|[^"\\])*"(?=\s*:)/g, 20),
+						rule("syntax-string", /"(?:\\.|[^"\\])*"/g, 18),
+						rule("syntax-boolean", /\b(true|false|null)\b/g, 12),
+						rule("syntax-number", /-?\b\d+(?:\.\d+)?(?:e[+-]?\d+)?\b/gi, 10),
+					];
+				}
+				if (language === "shell") {
+					return [
+						rule("syntax-comment", /#[^\n]*/g, 20),
+						rule("syntax-string", /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, 18),
+						rule("syntax-variable", /\$[A-Za-z_][A-Za-z0-9_]*|\$\{[^}]+\}/g, 16),
+						rule("syntax-keyword", /\b(export|npm|npx|node|tsx|python3|pi|curl|rg|cd|source)\b/g, 12),
+					];
+				}
+				if (language === "html") {
+					return [
+						rule("syntax-comment", /<!--[\s\S]*?-->/g, 20),
+						rule("syntax-tag", /<\/?[A-Za-z][^>\n]*\/?>/g, 12),
+						rule("syntax-string", /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, 10),
+					];
+				}
+				if (language === "markdown") {
+					return [
+						rule("syntax-comment", /^#{1,6}\s.*$/gm, 14),
+						rule("syntax-string", /`[^`\n]+`/g, 12),
+						rule("syntax-keyword", /^\s*[-*]\s/gm, 10),
+					];
+				}
+				return [];
+			}
+
+			function rule(className, regex, priority) {
+				return { className, regex, priority };
+			}
+
+			function delay(ms) {
+				return new Promise((resolve) => setTimeout(resolve, ms));
+			}
+
+			document.getElementById("scenarioSelect").onchange = (event) => {
+				selectedScenario = event.target.value;
+				renderScenarioSelect();
+				appendDevEntry("select", "Scenario selected", selectedScenario);
+			};
+			document.getElementById("executionMode").onchange = (event) => {
+				setExecutionMode(event.target.value);
+			};
+			document.getElementById("clearStream").onclick = clearStream;
+			document.getElementById("checkPi").onclick = checkPiHealth;
+			document.getElementById("showCodeactReference").onclick = () => {
+				const details = document.getElementById("developerReference");
+				details.open = !details.open;
+			};
+			const startButton = document.getElementById("start");
+			if (startButton) startButton.onclick = async () => {
+				setExecutionMode("workflow");
+				appendDevEntry(
+					"workflow",
+					"Starting Temporal workflow",
+					`scenarioId=${selectedScenario}\nreliabilityMode=${selectedReliabilityMode}`,
+				);
+				const result = await api("/api/runs", {
+					method: "POST",
+					body: { scenarioId: selectedScenario, reliabilityMode: selectedReliabilityMode },
+				});
+				currentRun = {
+					runId: result.workflowId,
+					title: selectedScenario,
+					reliabilityMode: selectedReliabilityMode,
+					phase: "preparing",
+					timeline: [],
+				};
+				seenPromptForRun = undefined;
+				appendDevEntry("workflow", "Workflow started", result.workflowId);
+				renderRun();
+				setTimeout(refreshRun, 1200);
+			};
+			document.getElementById("reliabilityMode").onchange = (event) => {
+				selectedReliabilityMode = event.target.value;
+				renderReliabilityMode();
+				appendDevEntry("mode", "Reliability drill selected", reliabilityHints[selectedReliabilityMode]);
+			};
+			const generatePiButton = document.getElementById("generatePi");
+			if (generatePiButton) generatePiButton.onclick = async () => {
+				await streamPiGeneration();
+			};
+			const inspectPolicyButton = document.getElementById("inspectPolicy");
+			if (inspectPolicyButton) inspectPolicyButton.onclick = async () => {
+				if (!currentRun) return;
+				const payload = {
+					requestedBy: "case-study-research-agent",
+					policyId: "draft-only-human-approval",
+					question: "Can this customer-proof matrix and marketing HTML draft proceed to human review or export?",
+				};
+				appendDevEntry("signal", "inspectPolicySignal", JSON.stringify(payload, null, 2), { code: true });
+				currentRun = await api(`/api/runs/${currentRun.runId}/policy-inspection`, {
+					method: "POST",
+					body: payload,
+				});
+				renderRun();
+				appendDevEntry(
+					"query",
+					"demoStateQuery after policy signal",
+					JSON.stringify(
+						{
+							phase: currentRun.phase,
+							latestPolicy: currentRun.policyInspections?.at(-1),
+						},
+						null,
+						2,
+					),
+					{ code: true },
+				);
+			};
+			const agentHandshakeButton = document.getElementById("agentHandshake");
+			if (agentHandshakeButton) agentHandshakeButton.onclick = async () => {
+				if (!currentRun) return;
+				const payload = {
+					fromAgent: "case-study-research-agent",
+					toAgent: "policy-review-agent",
+					intent: "Hand off the generated Temporal case-study matrix and marketing HTML draft for policy review before human approval/export.",
+				};
+				appendDevEntry("signal", "agentHandshakeSignal", JSON.stringify(payload, null, 2), { code: true });
+				currentRun = await api(`/api/runs/${currentRun.runId}/agent-handshake`, {
+					method: "POST",
+					body: payload,
+				});
+				renderRun();
+				appendDevEntry(
+					"query",
+					"demoStateQuery after handshake signal",
+					JSON.stringify(
+						{
+							phase: currentRun.phase,
+							latestHandshake: currentRun.agentHandshakes?.at(-1),
+						},
+						null,
+						2,
+					),
+					{ code: true },
+				);
+			};
+			const approveButton = document.getElementById("approve");
+			if (approveButton) approveButton.onclick = async () => {
+				if (!currentRun) return;
+				appendDevEntry("signal", "Sending approval signal", currentRun.runId);
+				currentRun = await api(`/api/runs/${currentRun.runId}/approval`, { method: "POST", body: { decision: "approved", notes: "Approved in demo UI." } });
+				renderRun();
+			};
+			const rejectButton = document.getElementById("reject");
+			if (rejectButton) rejectButton.onclick = async () => {
+				if (!currentRun) return;
+				appendDevEntry("signal", "Sending rejection signal", currentRun.runId);
+				currentRun = await api(`/api/runs/${currentRun.runId}/approval`, { method: "POST", body: { decision: "rejected", notes: "Rejected in demo UI." } });
+				renderRun();
+			};
+			document.getElementById("runReactHarness").onclick = () => streamHarness("react");
+			document.getElementById("runCodeActHarness").onclick = () => streamHarness("codeact");
+			document.getElementById("runHarnessCompare").onclick = () => streamHarness("all");
+			document.getElementById("openArtifacts").onclick = async () => {
+				appendDevEntry("artifact", "Opening artifacts folder", "Requesting local OS file browser from the backend.");
+				const result = await api("/api/artifacts/open", { method: "POST" });
+				appendDevEntry("artifact", "Artifacts folder opened", result.opened);
+			};
+			setInterval(refreshRun, 3000);
+			load().catch((error) => {
+				document.getElementById("connection").textContent = "Setup needed";
+				appendDevEntry("error", "Setup needed", error.message);
+			});
+		</script>
+	</body>
+</html>
