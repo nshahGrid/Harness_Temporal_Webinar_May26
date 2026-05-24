@@ -51,7 +51,7 @@ Exit condition: ${result.exitCondition}
 ${rows || "| No valid records extracted | Needs review | Needs review | Source crawl incomplete |"}
 
 ## Coverage Notes
-- ReAct should use the LLM-selected bounded strategy and stop when its page budget is exhausted.
+- ReAct should use the same target/page budget as CodeAct while letting Pi choose branch planning and bounded concurrency.
 - CodeAct should write and validate Python Temporal scaffold code, then use bounded parallel extraction for broader coverage.
 - If fewer than ${result.targetCount} valid records are found, keep the workflow in a needs-review state instead of inventing customer stories.
 

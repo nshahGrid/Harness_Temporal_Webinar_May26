@@ -950,7 +950,7 @@
 
 			function harnessRunDescription(agentMode) {
 				if (agentMode === "react") {
-					return "ReAct streams the classic reason-act-observe loop: Pi searches, creates a concise parallel branch plan, then chooses a bounded target count, page budget, and concurrency, then the harness fetches and extracts Temporal customer-story evidence until the selected budget or exit condition is reached.";
+					return "ReAct streams the classic reason-act-observe loop: Pi searches, creates a concise parallel branch plan, chooses bounded concurrency, then the harness uses the same target/page budget as CodeAct while fetching and extracting Temporal customer-story evidence.";
 				}
 				if (agentMode === "codeact") {
 					return "CodeAct shows Pi-generated Python Temporal scaffold code first, starts the generated Python worker/workflow in Temporal Cloud when configured, then streams the workflow ID, activity names, and extracted customer-story facts.";

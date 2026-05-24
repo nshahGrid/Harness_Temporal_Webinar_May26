@@ -13,6 +13,8 @@ import {
 	mockHarnessLlmGenerate,
 } from "./mock-temporal.ts";
 
+process.env.CODEACT_TEMPORAL_CLOUD = "0";
+
 test("harness demo shows business-aligned simple, ReAct, and CodeAct agents", async () => {
 	const outputDir = await mkdtemp(join(tmpdir(), "pi-temporal-harness-"));
 	try {
@@ -39,7 +41,7 @@ test("harness demo shows business-aligned simple, ReAct, and CodeAct agents", as
 		);
 		assert.ok(react);
 		assert.equal(react.caseStudyResearch?.records.length, 2);
-		assert.equal(react.caseStudyResearch?.targetCount, 2);
+		assert.equal(react.caseStudyResearch?.targetCount, 4);
 		assert.ok(
 			react.toolCalls.some((call) => call.tool === "pi_live_search_cli"),
 		);
@@ -67,7 +69,7 @@ test("harness demo shows business-aligned simple, ReAct, and CodeAct agents", as
 			react.toolCalls.some(
 				(call) =>
 					call.tool === "react_execution_strategy" &&
-					call.output.includes('"targetCount": 2') &&
+					call.output.includes('"targetCount": 4') &&
 					call.output.includes('"concurrency": 2') &&
 					call.output.includes('"parallelPlan"'),
 			),

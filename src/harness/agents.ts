@@ -35,7 +35,7 @@ export async function runReactAgent(
 ): Promise<HarnessAgentResult> {
 	harness.prompt(DEMO_PROMPT);
 	harness.reason(
-		"I will run the business scenario as a ReAct loop: discover Temporal-owned case-study links, ask Pi for a parallel-minded branch plan, let Pi choose the bounded target count, page budget, and concurrency, fetch/extract evidence, and stop at the explicit exit condition.",
+		"I will run the business scenario as a ReAct loop: discover Temporal-owned case-study links, ask Pi for a parallel-minded branch plan and bounded concurrency, use the same target/page budget as CodeAct, fetch/extract evidence, and stop at the explicit exit condition.",
 	);
 	const useCases = await harness.inspectBusinessUseCases();
 	harness.observe(
@@ -69,7 +69,7 @@ export async function runReactAgent(
 	return buildResult(
 		harness,
 		"ReAct agent",
-		"Uses a reason, act, observe loop to plan independent research branches, fetch and extract Temporal customer stories using the LLM-selected strategy, then exits when the page budget, target count, or review condition is reached.",
+		"Uses a reason, act, observe loop to plan independent research branches, fetch and extract Temporal customer stories with the same target/page budget as CodeAct, then exits when the budget, target count, or review condition is reached.",
 		primitives.map((primitive) => primitive.id),
 		research,
 	);

@@ -157,7 +157,7 @@ return answer;`,
 					title: "Reason + tool calls",
 					language: "ts",
 					code: `harness.reason(
-  "Let Pi create a concise parallel branch plan, then choose target count, page budget, and concurrency, then fetch and extract Temporal case studies until the selected exit condition is hit.",
+  "Let Pi create a concise parallel branch plan and choose concurrency, then use the same target/page budget as CodeAct while fetching and extracting Temporal case studies until the exit condition is hit.",
 );
 
 const useCases = await harness.inspectBusinessUseCases();

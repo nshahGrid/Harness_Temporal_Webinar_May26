@@ -14,7 +14,6 @@ import {
 	type FailedPage,
 	type FetchText,
 	isTemporalCaseStudyUrl,
-	REACT_DEFAULT_PAGE_BUDGET,
 	renderCaseStudyMarketingPage,
 	renderCaseStudySourceCitations,
 	TEMPORAL_CUSTOMER_STORIES_URL,
@@ -203,9 +202,10 @@ export class PiTemporalHarness {
 		const liveSearch = await this.discoverTemporalSearchWithPi("react");
 		const strategy = normalizeReactExecutionStrategy(liveSearch.strategy, {
 			pageBudgetOverride: this.researchOptions.reactPageBudget,
+			defaultPageBudget:
+				this.researchOptions.codeActPageBudget ?? CODEACT_PAGE_BUDGET,
 			targetCountCap:
 				this.researchOptions.researchTargetCount ?? CASE_STUDY_TARGET_COUNT,
-			discoveredCount: liveSearch.urls.length,
 		});
 		this.recordTool(
 			"react_execution_strategy",
@@ -1427,11 +1427,12 @@ function buildPiLiveTemporalSearchPrompt(): string {
 		"Choose the ReAct execution strategy you would use for this business task.",
 		"Plan in a parallel-minded ReAct style: identify independent research branches that could be fetched/extracted concurrently, then choose the bounded concurrency you would use.",
 		"Return a concise parallelPlan list with branch-level actions only. Do not include private chain-of-thought.",
-		"Choose how many valid case-study records to target, how many candidate pages to inspect, and whether page processing should be single-lane or concurrent.",
-		"Keep it bounded for a live demo: targetCount must be 1-20, pageBudget must be 1-40, and concurrency must be 1-8.",
+		"Use the same fair comparison budget as CodeAct: targetCount must be 20 and pageBudget must be 40.",
+		"If fewer than 20 live URLs are actually discovered, do not invent URLs; return the real list and the harness will mark partial coverage for review.",
+		"Choose whether page processing should be single-lane or concurrent. Keep concurrency bounded from 1-8.",
 		"Return only the discoveredUrls you actually found. Do not pad the URL list to a fixed count.",
 		"Return ONLY JSON with this shape:",
-		'{"discoveredUrls":["https://temporal.io/resources/case-studies/..."],"executionStrategy":{"targetCount":6,"pageBudget":8,"concurrency":2,"parallelPlan":["branch 1: fetch AI-agent case studies","branch 2: fetch platform reliability case studies"],"rationale":"short reason"},"observations":["short note"]}',
+		'{"discoveredUrls":["https://temporal.io/resources/case-studies/..."],"executionStrategy":{"targetCount":20,"pageBudget":40,"concurrency":2,"parallelPlan":["branch 1: fetch AI-agent case studies","branch 2: fetch platform reliability case studies"],"rationale":"short reason"},"observations":["short note"]}',
 		"Do not include raw environment variables, API keys, Temporal namespace, PI_COMMAND, or secrets.",
 		"Do not invent URLs. If the live fetch fails, return JSON with discoveredUrls as an empty array and observations explaining the failure.",
 	].join("\n");
@@ -1499,20 +1500,17 @@ function normalizeReactExecutionStrategy(
 	strategy: Partial<ReactExecutionStrategy> | undefined,
 	options: {
 		pageBudgetOverride?: number;
+		defaultPageBudget: number;
 		targetCountCap: number;
-		discoveredCount: number;
 	},
 ): ReactExecutionStrategy {
 	const targetCount = clampInteger(
-		strategy?.targetCount ??
-			Math.min(options.targetCountCap, Math.max(1, options.discoveredCount)),
+		options.targetCountCap,
 		1,
 		options.targetCountCap,
 	);
 	const pageBudget = clampInteger(
-		options.pageBudgetOverride ??
-			strategy?.pageBudget ??
-			Math.min(REACT_DEFAULT_PAGE_BUDGET, targetCount),
+		options.pageBudgetOverride ?? options.defaultPageBudget,
 		1,
 		CODEACT_PAGE_BUDGET,
 	);

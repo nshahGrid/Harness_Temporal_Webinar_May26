@@ -520,6 +520,9 @@ function exitCondition(
 	if (status === "complete")
 		return `${targetCount} valid Temporal case-study records found.`;
 	if (mode === "react") {
+		if (attemptedCount < pageBudget) {
+			return `LLM-selected ReAct discovery returned ${attemptedCount}/${pageBudget} candidate pages; ${recordCount}/${targetCount} records were found, so the run needs review instead of inventing missing stories.`;
+		}
 		return `LLM-selected ReAct strategy exhausted its page budget: ${attemptedCount}/${pageBudget} pages attempted at concurrency ${concurrency}, with ${recordCount}/${targetCount} records found.`;
 	}
 	return `Bounded parallel crawl completed with ${recordCount}/${targetCount} valid records; workflow should pause for review instead of fabricating missing case studies.`;

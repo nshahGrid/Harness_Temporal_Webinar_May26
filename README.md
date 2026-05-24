@@ -4,7 +4,7 @@ Open-source demo showing how to wrap LLM-driven research in a durable, inspectab
 
 The demo researches Temporal-owned customer case-study pages, then compares two agent execution styles:
 
-- **ReAct**: Pi/LLM chooses a bounded live-search strategy and the harness extracts evidence from selected pages.
+- **ReAct**: Pi/LLM chooses the live-search branches and bounded concurrency while the harness uses the same target/page budget as CodeAct, then extracts evidence from selected pages.
 - **CodeAct**: Pi/LLM generates Python Temporal workflow code, the harness validates it, and the generated workflow can run in Temporal Cloud.
 
 Both paths produce draft-only marketing artifacts with citations and an explicit approval gate. The demo does not publish pages, send email, update CRM, or call external business systems.
