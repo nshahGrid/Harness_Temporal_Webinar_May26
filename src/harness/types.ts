@@ -2,6 +2,7 @@ import type {
 	CaseStudyResearchResult,
 	FetchText,
 } from "../case-study-research.ts";
+import type { TemporalScaffoldSpec } from "./temporal-scaffold.ts";
 
 export const harnessAgentModes = ["simple", "react", "codeact"] as const;
 
@@ -19,11 +20,15 @@ export interface HarnessDemoOptions {
 	codeActConcurrency?: number;
 	llmGenerate?: HarnessLlmGenerate;
 	enableCodeActTemporalCloud?: boolean;
+	enableCodeActScaffoldChildWorkflow?: boolean;
+	enablePiExtractionCache?: boolean;
+	piExtractionCachePath?: string;
 }
 
 export interface HarnessLlmRequest {
 	purpose: string;
 	prompt: string;
+	skillName?: string | null;
 	timeoutMs?: number;
 }
 
@@ -82,6 +87,53 @@ export interface GeneratedFile {
 	path: string;
 	relativePath: string;
 	purpose: string;
+}
+
+export interface CodeActScaffoldWorkflowInput {
+	runId: string;
+	scaffoldDir: string;
+	repairAttempts?: number;
+	timeoutMs?: number;
+	childWorkflowId?: string;
+}
+
+export interface CodeActScaffoldAttemptActivityInput {
+	scaffoldDir: string;
+	attempt: number;
+	timeoutMs?: number;
+	previousError?: string;
+	previousOutput?: string;
+}
+
+export interface CodeActScaffoldAttemptActivityResult {
+	attempt: number;
+	purpose: string;
+	status: "validated" | "rejected";
+	output?: string;
+	errorMessage?: string;
+	spec?: TemporalScaffoldSpec;
+	generated?: GeneratedFile[];
+	validation?: string[];
+}
+
+export interface CodeActScaffoldWorkflowAttempt {
+	attempt: number;
+	purpose: string;
+	status: "validated" | "rejected";
+	errorMessage?: string;
+	validation?: string[];
+}
+
+export interface CodeActScaffoldWorkflowResult {
+	parentWorkflowId?: string;
+	childWorkflowId?: string;
+	spec: TemporalScaffoldSpec;
+	generated: GeneratedFile[];
+	validation: string[];
+	usedFallback: boolean;
+	acceptedAttempt?: number;
+	acceptedOutput?: string;
+	attempts: CodeActScaffoldWorkflowAttempt[];
 }
 
 export interface CodeActTemporalCloudRun {

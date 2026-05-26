@@ -16,6 +16,7 @@ import {
 	TEMPORAL_SITEMAP_URL,
 } from "../case-study-research.ts";
 import { hasTemporalEnv } from "../env.ts";
+import { artifactsDir } from "../paths.ts";
 import { redactSecrets } from "../redact.ts";
 import type { CodeActTemporalCloudRun } from "./types.ts";
 
@@ -98,9 +99,26 @@ export function shouldRunCodeActTemporalCloud(
 }
 
 export function codeActTaskQueue(): string {
+	return codeActTaskQueueForRun();
+}
+
+export function codeActTaskQueueForRun(runId?: string): string {
 	const configured = process.env.TEMPORAL_CODEACT_TASK_QUEUE;
-	if (configured) return configured;
-	return `${process.env.TEMPORAL_TASK_QUEUE || "pi-gtm-demo"}-codeact`;
+	const base =
+		configured ??
+		[process.env.TEMPORAL_TASK_QUEUE, "codeact"].filter(Boolean).join("-");
+	if (!runId || process.env.CODEACT_TEMPORAL_SHARED_TASK_QUEUE === "1")
+		return base;
+	return `${base}-${sanitizeTaskQueueSuffix(runId)}`;
+}
+
+function sanitizeTaskQueueSuffix(runId: string): string {
+	const suffix = runId
+		.toLowerCase()
+		.replace(/[^a-z0-9-]+/g, "-")
+		.replace(/^-+|-+$/g, "")
+		.slice(0, 80);
+	return suffix || "run";
 }
 
 export async function runGeneratedTemporalCloudScaffold(
@@ -111,7 +129,7 @@ export async function runGeneratedTemporalCloudScaffold(
 			cloudRun: {
 				workflowId: "",
 				workflowType: codeActTemporalWorkflowType,
-				taskQueue: codeActTaskQueue(),
+				taskQueue: codeActTaskQueueForRun(options.runId),
 				activities: codeActTemporalActivityTypes,
 				status: "skipped",
 				message:
@@ -122,11 +140,12 @@ export async function runGeneratedTemporalCloudScaffold(
 	}
 
 	const workflowId = codeActWorkflowId(options.runId);
-	const taskQueue = codeActTaskQueue();
+	const taskQueue = codeActTaskQueueForRun(options.runId);
 	const python = await resolvePythonRuntime(
 		options.scaffoldDir,
 		options.onStatus,
 	);
+	const piExtractionCachePath = codeActPiExtractionCachePath();
 	const env = {
 		...process.env,
 		PYTHONUNBUFFERED: "1",
@@ -143,6 +162,9 @@ export async function runGeneratedTemporalCloudScaffold(
 		CODEACT_PAGE_BUDGET: String(options.pageBudget),
 		CODEACT_BATCH_SIZE: String(Math.max(1, options.concurrency)),
 		CODEACT_AUTO_APPROVE: "1",
+		...(piExtractionCachePath
+			? { PI_EXTRACTION_CACHE_PATH: piExtractionCachePath }
+			: {}),
 	};
 
 	let worker: ChildProcessWithoutNullStreams | undefined;
@@ -256,6 +278,19 @@ export async function runGeneratedTemporalCloudScaffold(
 			if (!worker.killed) worker.kill("SIGKILL");
 		}
 	}
+}
+
+function codeActPiExtractionCachePath(): string | undefined {
+	if (
+		process.env.PI_EXTRACTION_CACHE !== undefined &&
+		/^(0|false|off|no)$/i.test(process.env.PI_EXTRACTION_CACHE.trim())
+	) {
+		return undefined;
+	}
+	return (
+		process.env.CODEACT_PI_EXTRACTION_CACHE_PATH ??
+		join(artifactsDir, "cache", "codeact-pi-extractions.json")
+	);
 }
 
 function pipeWorkerOutput(

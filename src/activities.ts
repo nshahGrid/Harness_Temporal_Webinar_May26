@@ -1,7 +1,26 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ApplicationFailure, Context } from "@temporalio/activity";
+import {
+	buildTemporalScaffoldLlmPrompt,
+	buildTemporalScaffoldRepairPrompt,
+} from "./harness/pi-harness.ts";
+import {
+	createTemporalScaffoldSpec,
+	parseTemporalScaffoldSpecFromBash,
+	parseTemporalScaffoldSpecFromLlm,
+	temporalDeveloperSkillName,
+	validateTemporalScaffold,
+	writeTemporalScaffold,
+} from "./harness/temporal-scaffold.ts";
+import type {
+	CodeActScaffoldAttemptActivityInput,
+	CodeActScaffoldAttemptActivityResult,
+	CodeActScaffoldWorkflowInput,
+} from "./harness/types.ts";
 import { artifactsDir, packageRelative } from "./paths.ts";
+import { generateTextWithPi } from "./pi-runner.ts";
+import { redactedErrorMessage } from "./redact.ts";
 import { buildFixturePiOutput, buildPromptPack } from "./scenario-data.ts";
 import { getScenarioDefinition } from "./scenario-definitions.ts";
 import type {
@@ -66,6 +85,67 @@ export async function exportArtifactActivity(
 		state.reliabilityMode,
 		incident,
 	);
+}
+
+export async function codeActScaffoldAttemptActivity(
+	input: CodeActScaffoldAttemptActivityInput,
+): Promise<CodeActScaffoldAttemptActivityResult> {
+	const basePrompt = buildTemporalScaffoldLlmPrompt();
+	const purpose =
+		input.attempt === 1
+			? "codeact-temporal-bash-scaffold"
+			: `codeact-temporal-bash-scaffold-repair-${input.attempt - 1}`;
+	const prompt =
+		input.attempt === 1
+			? basePrompt
+			: buildTemporalScaffoldRepairPrompt(
+					basePrompt,
+					input.previousError || "Previous scaffold attempt failed.",
+					input.previousOutput || "",
+					input.attempt - 1,
+				);
+	let output = "";
+	try {
+		output = await generateTextWithPi({
+			prompt,
+			skillName: temporalDeveloperSkillName,
+			timeoutMs: input.timeoutMs ?? 150_000,
+		});
+		const spec = parseTemporalScaffoldOutput(output);
+		const generated = await writeTemporalScaffold(input.scaffoldDir, spec);
+		const validation = await validateTemporalScaffold(input.scaffoldDir);
+		return {
+			attempt: input.attempt,
+			purpose,
+			status: "validated",
+			output,
+			spec,
+			generated,
+			validation,
+		};
+	} catch (error) {
+		return {
+			attempt: input.attempt,
+			purpose,
+			status: "rejected",
+			output: output || undefined,
+			errorMessage: redactedErrorMessage(error),
+		};
+	}
+}
+
+export async function codeActScaffoldFallbackActivity(
+	input: Pick<CodeActScaffoldWorkflowInput, "scaffoldDir">,
+): Promise<
+	Pick<
+		CodeActScaffoldAttemptActivityResult,
+		"spec" | "generated" | "validation"
+	>
+> {
+	const spec = createTemporalScaffoldSpec();
+	const generated = await writeTemporalScaffold(input.scaffoldDir, spec);
+	const validation = await validateTemporalScaffold(input.scaffoldDir);
+	return { spec, generated, validation };
 }
 
 function buildMarkdownArtifact(state: DemoWorkflowState): string {
@@ -147,6 +227,22 @@ function escapeHtml(value: string): string {
 		};
 		return entities[char] ?? char;
 	});
+}
+
+function parseTemporalScaffoldOutput(output: string) {
+	try {
+		return parseTemporalScaffoldSpecFromBash(output);
+	} catch (bashError) {
+		const bashMessage =
+			bashError instanceof Error ? bashError.message : String(bashError);
+		try {
+			return parseTemporalScaffoldSpecFromLlm(output);
+		} catch {
+			throw new Error(
+				`Pi output did not contain a complete scaffold. Last bash parser error: ${bashMessage}`,
+			);
+		}
+	}
 }
 
 async function maybeFailForReliabilityDrill(

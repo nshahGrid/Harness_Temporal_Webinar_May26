@@ -32,12 +32,12 @@ export function buildDemoModes(): DemoMode[] {
 			title: "CodeAct",
 			shortName: "Direct",
 			definition:
-				"The agent uses code execution as its action. In this demo Pi/LLM emits Python Temporal scaffold code through a bash escape hatch; the harness writes, lints, validates, and runs it before asking Pi/LLM for the marketing HTML output.",
+				"The agent uses code execution as its action. In this demo Pi/LLM loads the Temporal Agent Skill, emits Python Temporal scaffold code through a bash escape hatch, and the harness writes, lints, validates, and runs it before asking Pi/LLM for the marketing HTML output.",
 			whenToShow:
 				"Use this when the audience wants to understand the primitive: an AI agent can produce code, execute commands, inspect results, and iterate.",
 			outputs: [
 				"Python Temporal scaffold files",
-				"Validation and generated-code lint output",
+				"Temporal Agent Skill-backed generation plus generated-code lint output",
 				"Pi/LLM-generated workflow, activities, signals, queries, retry policy, worker, client, and HTML artifact",
 			],
 			snippets: [
@@ -46,12 +46,13 @@ export function buildDemoModes(): DemoMode[] {
 					language: "ts",
 					code: `reason("Write the Temporal case-study research scaffold through the bash escape hatch.");
 
-const context = await bash("temporal skill context load");
+const skill = await bash("temporal agent skill load");
 const files = await bash("temporal scaffold write");
+const referenceChecks = await bash("temporal scaffold validation-references");
 const validation = await bash("temporal scaffold validate");
 const extraction = await bash("temporal case-study extract --mode codeact");
 
-return { context, files, validation, extraction };`,
+return { skill, files, referenceChecks, validation, extraction };`,
 				},
 				{
 					title: "Generated files",
@@ -78,7 +79,7 @@ return { context, files, validation, extraction };`,
 			outputs: [
 				"Agent ladder report",
 				"Timeline of prompt, reason, act, tool, artifact, result events",
-				"Pi/LLM-generated CodeAct scaffold plus validation transcript",
+				"Temporal Agent Skill-generated CodeAct scaffold plus validation transcript",
 				"Parallel CodeAct worker-lane telemetry for discovery, extraction, retries, and aggregation",
 			],
 			snippets: [
@@ -192,7 +193,7 @@ await harness.writeCaseStudyArtifactBundle("react", bundle);`,
 			title: "CodeAct Agent",
 			shortName: "CodeAct",
 			definition:
-				"CodeAct keeps the reasoning loop, but the action is code execution. In this demo, Pi/LLM uses a bash escape hatch to emit Python Temporal code, then the harness validates that generated code and runs bounded parallel research at runtime.",
+				"CodeAct keeps the reasoning loop, but the action is code execution. In this demo, Pi/LLM uses the Temporal Agent Skill and a bash escape hatch to emit Python Temporal code, then the harness validates that generated code and runs bounded parallel research at runtime.",
 			audienceTakeaway:
 				"This is the developer hook: the agent does not just describe Temporal primitives, it generates a scaffold with workflow state, retryable activities, signals, queries, bounded parallelism, worker, and client code.",
 			snippets: [
@@ -200,9 +201,10 @@ await harness.writeCaseStudyArtifactBundle("react", bundle);`,
 					title: "Escape hatch",
 					language: "ts",
 					code: `await harness.bash("temporal scaffold business-use-cases");
-await harness.bash("temporal skill context load");
+await harness.bash("temporal agent skill load");
 await harness.bash("temporal scaffold primitives");
 await harness.bash("temporal scaffold write");
+await harness.bash("temporal scaffold validation-references");
 await harness.bash("temporal scaffold validate");
 await harness.bash("temporal case-study extract --mode codeact");`,
 				},

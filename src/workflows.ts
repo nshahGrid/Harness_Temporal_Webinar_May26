@@ -1,11 +1,19 @@
 import {
+	ChildWorkflowCancellationType,
 	condition,
 	defineQuery,
 	defineSignal,
+	executeChild,
+	ParentClosePolicy,
 	proxyActivities,
 	setHandler,
 } from "@temporalio/workflow";
 import type * as activities from "./activities.ts";
+import type {
+	CodeActScaffoldWorkflowAttempt,
+	CodeActScaffoldWorkflowInput,
+	CodeActScaffoldWorkflowResult,
+} from "./harness/types.ts";
 import { buildAgentHandshake, buildPolicyInspection } from "./policy.ts";
 import { getScenarioDefinition } from "./scenario-definitions.ts";
 import type {
@@ -23,6 +31,13 @@ const activity = proxyActivities<typeof activities>({
 	retry: {
 		initialInterval: "2 seconds",
 		maximumAttempts: 3,
+	},
+});
+
+const scaffoldActivity = proxyActivities<typeof activities>({
+	startToCloseTimeout: "5 minutes",
+	retry: {
+		maximumAttempts: 1,
 	},
 });
 
@@ -138,6 +153,88 @@ export async function gtmDemoWorkflow(
 	state.phase = "completed";
 	addEvent(`Completed with artifact ${state.artifact.relativePath}`);
 	return state;
+}
+
+export async function codeActScaffoldParentWorkflow(
+	input: CodeActScaffoldWorkflowInput,
+): Promise<CodeActScaffoldWorkflowResult> {
+	const childWorkflowId =
+		input.childWorkflowId || `${input.runId}-codeact-scaffold-child`;
+	const result = await executeChild(codeActScaffoldChildWorkflow, {
+		workflowId: childWorkflowId,
+		args: [{ ...input, childWorkflowId }],
+		parentClosePolicy: ParentClosePolicy.TERMINATE,
+		cancellationType: ChildWorkflowCancellationType.WAIT_CANCELLATION_COMPLETED,
+	});
+	return { ...result, childWorkflowId };
+}
+
+export async function codeActScaffoldChildWorkflow(
+	input: CodeActScaffoldWorkflowInput,
+): Promise<CodeActScaffoldWorkflowResult> {
+	const repairAttempts = normalizeRepairAttempts(input.repairAttempts);
+	const maxAttempts = 1 + repairAttempts;
+	const attempts: CodeActScaffoldWorkflowAttempt[] = [];
+	let previousError = "";
+	let previousOutput = "";
+
+	for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+		const result = await scaffoldActivity.codeActScaffoldAttemptActivity({
+			scaffoldDir: input.scaffoldDir,
+			attempt,
+			timeoutMs: input.timeoutMs,
+			previousError,
+			previousOutput,
+		});
+		attempts.push({
+			attempt,
+			purpose: result.purpose,
+			status: result.status,
+			errorMessage: result.errorMessage,
+			validation: result.validation,
+		});
+		if (
+			result.status === "validated" &&
+			result.spec &&
+			result.generated &&
+			result.validation
+		) {
+			return {
+				childWorkflowId: input.childWorkflowId,
+				spec: result.spec,
+				generated: result.generated,
+				validation: result.validation,
+				usedFallback: false,
+				acceptedAttempt: attempt,
+				acceptedOutput: result.output,
+				attempts,
+			};
+		}
+		previousError = result.errorMessage || "Generated scaffold was rejected.";
+		previousOutput = result.output || "";
+	}
+
+	const fallback = await scaffoldActivity.codeActScaffoldFallbackActivity({
+		scaffoldDir: input.scaffoldDir,
+	});
+	if (!fallback.spec || !fallback.generated || !fallback.validation) {
+		throw new Error(
+			"Validated fallback scaffold activity returned no scaffold.",
+		);
+	}
+	return {
+		childWorkflowId: input.childWorkflowId,
+		spec: fallback.spec,
+		generated: fallback.generated,
+		validation: fallback.validation,
+		usedFallback: true,
+		attempts,
+	};
+}
+
+function normalizeRepairAttempts(value: number | undefined): number {
+	if (!value || value < 0) return 0;
+	return Math.floor(value);
 }
 
 function errorMessage(error: unknown): string {

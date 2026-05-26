@@ -43,13 +43,14 @@ Use the bash escape hatch when asked to showcase CodeAct:
 
 ```bash
 temporal scaffold business-use-cases
+temporal agent skill load
 temporal scaffold primitives
 temporal scaffold write
 temporal scaffold validate
 temporal case-study extract --mode codeact
 ```
 
-The generated scaffold should be Python and include Temporal Workflow, Activities, Signals, Queries, RetryPolicy, worker, client, and bounded parallel activity execution.
+The generated scaffold should be backed by the Temporal Agent Skill, should be Python, and should include Temporal Workflow, Activities, Signals, Queries, RetryPolicy, worker, client, and bounded parallel activity execution.
 
 ## Guardrails
 

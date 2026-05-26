@@ -68,6 +68,7 @@ export function makeTemporalMockFetch(
 
 export const mockHarnessLlmGenerate: HarnessLlmGenerate = async ({
 	purpose,
+	prompt,
 }) => {
 	if (purpose.endsWith("live-temporal-website-search")) {
 		return JSON.stringify(
@@ -97,6 +98,29 @@ export const mockHarnessLlmGenerate: HarnessLlmGenerate = async ({
 		purpose === "codeact-temporal-python-scaffold"
 	) {
 		return renderTemporalScaffoldBashScript(createTemporalScaffoldSpec());
+	}
+	if (purpose.endsWith("case-study-record-extraction")) {
+		const url =
+			/Source URL:\s*(https:\/\/temporal\.io\/resources\/case-studies\/[^\s]+)/.exec(
+				prompt,
+			)?.[1] ?? mockCaseStudyUrls[0];
+		const company = companyFromUrl(url);
+		return JSON.stringify(
+			{
+				valid: true,
+				url,
+				company,
+				headline: headlineFor(company, url),
+				summary: `${company} uses Temporal to orchestrate critical business workflows with durable execution, retries, and visibility across distributed systems.`,
+				evidenceQuote: `This customer story explains how ${company} reduced operational risk by keeping workflow state durable while services, APIs, or workers may fail.`,
+				temporalValue: `${company} uses Temporal to orchestrate critical business workflows with durable execution, retries, and visibility across distributed systems.`,
+				industry: industryFor(company),
+				useCase: "Reliable workflow orchestration",
+				sdk: "Python",
+			},
+			null,
+			2,
+		);
 	}
 	if (purpose.endsWith("case-study-artifact-bundle")) {
 		const mode = purpose.startsWith("react") ? "ReAct" : "CodeAct";

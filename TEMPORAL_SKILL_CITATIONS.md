@@ -1,6 +1,15 @@
 # Temporal Skill Citations
 
-This demo uses the Temporal Python skill references in a limited way to shape the generated CodeAct scaffold. It does not copy large snippets.
+This demo uses the Temporal Agent Skill for CodeAct scaffold generation. The scaffold-generation and repair calls in `src/harness/pi-harness.ts` pass `--skill skills/temporal-developer/SKILL.md` to Pi, then ask Pi to emit the bash heredoc scaffold for the Temporal customer case-study workflow.
+
+The harness prompt still supplies the demo-specific output contract: required files, heredoc format, case-study crawling constraints, Cloud environment variables, and strict validation gates. The Temporal Agent Skill supplies the Temporal SDK code-generation guidance for Workflows, Activities, Workers, Clients, determinism, retries, Signals, Queries, and durable AI-agent patterns.
+
+Selected files from Temporal's Python skill reference directory are used both as generation guidance and as the basis for post-generation validation checks. The demo keeps only a concise local summary under `skills/temporal-developer/SKILL.md` and links to the upstream sources instead of copying large snippets.
+
+## Temporal Agent Skill
+
+- `temporal-developer` skill: https://github.com/temporalio/skill-temporal-developer/blob/main/SKILL.md
+- Python reference directory: https://github.com/temporalio/skill-temporal-developer/tree/main/references/python
 
 ## Temporal Python References Used
 

@@ -3,17 +3,79 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { codeActTaskQueueForRun } from "../src/harness/codeact-temporal-cloud.ts";
 import { runTemporalPiHarnessDemo } from "../src/harness/demo.ts";
+import { shouldRunCodeActScaffoldChildWorkflow } from "../src/harness/scaffold-child-workflow.ts";
 import {
 	createTemporalScaffoldSpec,
 	renderTemporalScaffoldBashScript,
 } from "../src/harness/temporal-scaffold.ts";
 import {
 	makeTemporalMockFetch,
+	mockCaseStudyUrls,
 	mockHarnessLlmGenerate,
 } from "./mock-temporal.ts";
 
 process.env.CODEACT_TEMPORAL_CLOUD = "0";
+
+test("CodeAct scaffold child workflow is opt-in and disabled for mock LLM runs", () => {
+	const previous = {
+		address: process.env.TEMPORAL_ADDRESS,
+		namespace: process.env.TEMPORAL_NAMESPACE,
+		apiKey: process.env.TEMPORAL_API_KEY,
+		childWorkflow: process.env.CODEACT_SCAFFOLD_CHILD_WORKFLOW,
+	};
+	try {
+		process.env.TEMPORAL_ADDRESS = "localhost:7233";
+		process.env.TEMPORAL_NAMESPACE = "default";
+		delete process.env.TEMPORAL_API_KEY;
+		delete process.env.CODEACT_SCAFFOLD_CHILD_WORKFLOW;
+		assert.equal(shouldRunCodeActScaffoldChildWorkflow(false), false);
+
+		process.env.CODEACT_SCAFFOLD_CHILD_WORKFLOW = "1";
+		assert.equal(shouldRunCodeActScaffoldChildWorkflow(false), true);
+		assert.equal(shouldRunCodeActScaffoldChildWorkflow(true), false);
+
+		process.env.CODEACT_SCAFFOLD_CHILD_WORKFLOW = "0";
+		assert.equal(shouldRunCodeActScaffoldChildWorkflow(false), false);
+	} finally {
+		restoreEnv("TEMPORAL_ADDRESS", previous.address);
+		restoreEnv("TEMPORAL_NAMESPACE", previous.namespace);
+		restoreEnv("TEMPORAL_API_KEY", previous.apiKey);
+		restoreEnv("CODEACT_SCAFFOLD_CHILD_WORKFLOW", previous.childWorkflow);
+	}
+});
+
+test("CodeAct Cloud task queues are isolated per run by default", () => {
+	const previous = {
+		taskQueue: process.env.TEMPORAL_TASK_QUEUE,
+		codeactTaskQueue: process.env.TEMPORAL_CODEACT_TASK_QUEUE,
+		sharedTaskQueue: process.env.CODEACT_TEMPORAL_SHARED_TASK_QUEUE,
+	};
+	try {
+		process.env.TEMPORAL_TASK_QUEUE = "demo-task-queue";
+		delete process.env.TEMPORAL_CODEACT_TASK_QUEUE;
+
+		assert.notEqual(
+			codeActTaskQueueForRun("run-one"),
+			codeActTaskQueueForRun("run-two"),
+		);
+		assert.equal(
+			codeActTaskQueueForRun("Run One!"),
+			"demo-task-queue-codeact-run-one",
+		);
+
+		process.env.TEMPORAL_CODEACT_TASK_QUEUE = "shared-codeact";
+		assert.equal(codeActTaskQueueForRun("run-one"), "shared-codeact-run-one");
+
+		process.env.CODEACT_TEMPORAL_SHARED_TASK_QUEUE = "1";
+		assert.equal(codeActTaskQueueForRun("run-one"), "shared-codeact");
+	} finally {
+		restoreEnv("TEMPORAL_TASK_QUEUE", previous.taskQueue);
+		restoreEnv("TEMPORAL_CODEACT_TASK_QUEUE", previous.codeactTaskQueue);
+		restoreEnv("CODEACT_TEMPORAL_SHARED_TASK_QUEUE", previous.sharedTaskQueue);
+	}
+});
 
 test("harness demo shows business-aligned simple, ReAct, and CodeAct agents", async () => {
 	const outputDir = await mkdtemp(join(tmpdir(), "pi-temporal-harness-"));
@@ -82,6 +144,11 @@ test("harness demo shows business-aligned simple, ReAct, and CodeAct agents", as
 				(call) => call.tool === "fetch_extract_react_action",
 			),
 		);
+		assert.ok(
+			react.toolCalls.some(
+				(call) => call.tool === "pi_runtime_extract_case_study",
+			),
+		);
 		assert.ok(react.toolCalls.some((call) => call.tool === "llm_output"));
 		const reactArtifactPrompt =
 			react.toolCalls.find(
@@ -129,17 +196,44 @@ test("harness demo shows business-aligned simple, ReAct, and CodeAct agents", as
 			),
 		);
 		assert.ok(
+			codeAct.toolCalls.some(
+				(call) => call.tool === "pi_runtime_extract_case_study",
+			),
+		);
+		assert.ok(
 			codeAct.workerEvents.some((event) => event.phase === "aggregate"),
 		);
 		assert.ok(codeAct.toolCalls.some((call) => call.tool === "bash"));
 		assert.ok(
 			codeAct.toolCalls.some(
-				(call) => call.tool === "temporal_skill_context_loaded",
+				(call) => call.tool === "temporal_agent_skill_loaded",
 			),
 		);
 		assert.ok(
 			codeAct.toolCalls.some((call) =>
-				call.output.includes("Temporal Python skill context loaded"),
+				call.output.includes(
+					"Temporal Agent Skill configured for CodeAct scaffold generation",
+				),
+			),
+		);
+		assert.ok(
+			codeAct.toolCalls.some(
+				(call) =>
+					call.tool === "pi_agent_skill" &&
+					call.input === "codeact-temporal-bash-scaffold" &&
+					call.output.includes("skills/temporal-developer/SKILL.md"),
+			),
+		);
+		assert.ok(
+			codeAct.toolCalls.some(
+				(call) => call.tool === "temporal_validation_references",
+			),
+		);
+		assert.ok(
+			codeAct.toolCalls.some((call) =>
+				call.output.includes(
+					"Temporal Python reference checks used during and after CodeAct generation",
+				),
 			),
 		);
 		assert.ok(
@@ -162,6 +256,7 @@ test("harness demo shows business-aligned simple, ReAct, and CodeAct agents", as
 			codeAct.toolCalls.find(
 				(call) => call.input === "codeact-temporal-bash-scaffold",
 			)?.output ?? "";
+		assert.match(scaffoldPrompt, /Use the loaded temporal-developer/);
 		assert.match(scaffoldPrompt, /Strict validation contract:/);
 		assert.match(scaffoldPrompt, /activity_executor/);
 		assert.match(scaffoldPrompt, /ThreadPoolExecutor/);
@@ -217,6 +312,125 @@ test("harness demo shows business-aligned simple, ReAct, and CodeAct agents", as
 		assert.match(report, /generated-code lint: passed/);
 		assert.match(report, /bounded_parallel_subagent_extract/);
 		assert.match(report, /Parallel Worker Events/);
+	} finally {
+		await rm(outputDir, { recursive: true, force: true });
+	}
+});
+
+test("Pi record extraction accepts labeled fields without exact JSON", async () => {
+	const outputDir = await mkdtemp(join(tmpdir(), "pi-temporal-harness-"));
+	try {
+		const result = await runTemporalPiHarnessDemo({
+			agent: "react",
+			runId: "test-labeled-record-extraction",
+			outputDir,
+			researchFetchText: makeTemporalMockFetch(),
+			researchTargetCount: 1,
+			reactPageBudget: 1,
+			llmGenerate: async (request) => {
+				if (request.purpose === "react-live-temporal-website-search") {
+					return JSON.stringify({
+						discoveredUrls: [mockCaseStudyUrls[0]],
+						executionStrategy: {
+							targetCount: 1,
+							pageBudget: 1,
+							concurrency: 1,
+							parallelPlan: ["single branch: fetch one case study"],
+							rationale: "test labeled extraction",
+						},
+						observations: [],
+					});
+				}
+				if (request.purpose === "react-case-study-record-extraction") {
+					return [
+						"Company: ANZ Bank",
+						"Headline: ANZ accelerates home loan origination with Temporal",
+						"Summary: ANZ uses Temporal to coordinate durable home-loan workflows across distributed services.",
+						"Evidence quote: Temporal helped ANZ keep long-running application state durable while services changed.",
+						"Temporal value: Durable execution, retries, and visibility helped ANZ reduce orchestration risk.",
+						"Industry: Financial Services",
+						"Use case: Loan origination",
+					].join("\n");
+				}
+				return mockHarnessLlmGenerate(request);
+			},
+		});
+
+		const react = result.results[0];
+		assert.equal(react?.mode, "react");
+		assert.equal(react.caseStudyResearch?.records.length, 1);
+		assert.equal(react.caseStudyResearch?.records[0]?.company, "ANZ Bank");
+	} finally {
+		await rm(outputDir, { recursive: true, force: true });
+	}
+});
+
+test("Pi record extraction cache reuses parsed records across runs", async () => {
+	const outputDir = await mkdtemp(join(tmpdir(), "pi-temporal-harness-cache-"));
+	const cachePath = join(outputDir, "pi-extractions.json");
+	let extractionCalls = 0;
+	const runWithCache = async (runId: string) =>
+		runTemporalPiHarnessDemo({
+			agent: "react",
+			runId,
+			outputDir: join(outputDir, runId),
+			researchFetchText: makeTemporalMockFetch(),
+			researchTargetCount: 1,
+			reactPageBudget: 1,
+			enablePiExtractionCache: true,
+			piExtractionCachePath: cachePath,
+			llmGenerate: async (request) => {
+				if (request.purpose === "react-live-temporal-website-search") {
+					return JSON.stringify({
+						discoveredUrls: [mockCaseStudyUrls[0]],
+						executionStrategy: {
+							targetCount: 1,
+							pageBudget: 1,
+							concurrency: 1,
+							parallelPlan: ["single branch: fetch one case study"],
+							rationale: "test cached extraction",
+						},
+						observations: [],
+					});
+				}
+				if (request.purpose === "react-case-study-record-extraction") {
+					extractionCalls += 1;
+					return [
+						"Company: ANZ Bank",
+						"Headline: ANZ accelerates home loan origination with Temporal",
+						"Summary: ANZ uses Temporal to coordinate durable home-loan workflows across distributed services.",
+						"Evidence quote: Temporal helped ANZ keep long-running application state durable while services changed.",
+						"Temporal value: Durable execution, retries, and visibility helped ANZ reduce orchestration risk.",
+						"Industry: Financial Services",
+						"Use case: Loan origination",
+					].join("\n");
+				}
+				return mockHarnessLlmGenerate(request);
+			},
+		});
+	try {
+		const first = await runWithCache("first");
+		assert.equal(
+			first.results[0]?.caseStudyResearch?.records[0]?.company,
+			"ANZ Bank",
+		);
+		assert.equal(extractionCalls, 1);
+
+		const second = await runWithCache("second");
+		assert.equal(
+			second.results[0]?.caseStudyResearch?.records[0]?.company,
+			"ANZ Bank",
+		);
+		assert.equal(extractionCalls, 1);
+		assert.ok(
+			second.results[0]?.toolCalls.some(
+				(call) =>
+					call.tool === "pi_runtime_extract_case_study_cache" &&
+					call.output.includes('"status": "hit"'),
+			),
+		);
+		const cache = await readFile(cachePath, "utf8");
+		assert.match(cache, /ANZ Bank/);
 	} finally {
 		await rm(outputDir, { recursive: true, force: true });
 	}
@@ -538,6 +752,42 @@ test("malformed LLM artifact JSON falls back to deterministic artifacts", async 
 	}
 });
 
+test("failed LLM artifact generation falls back to deterministic artifacts", async () => {
+	const outputDir = await mkdtemp(join(tmpdir(), "pi-temporal-harness-"));
+	try {
+		const result = await runTemporalPiHarnessDemo({
+			agent: "codeact",
+			runId: "test-artifact-generation-fallback",
+			outputDir,
+			researchFetchText: makeTemporalMockFetch(),
+			researchTargetCount: 4,
+			codeActPageBudget: 6,
+			codeActConcurrency: 3,
+			llmGenerate: async (request) => {
+				if (request.purpose === "codeact-case-study-artifact-bundle") {
+					throw new Error("mock Pi artifact timeout");
+				}
+				return mockHarnessLlmGenerate(request);
+			},
+		});
+
+		const codeAct = result.results[0];
+		assert.equal(codeAct?.mode, "codeact");
+		assert.ok(
+			codeAct.toolCalls.some(
+				(call) => call.tool === "artifact_bundle_fallback",
+			),
+		);
+		assert.ok(
+			codeAct.artifacts.some((artifact) =>
+				artifact.relativePath.endsWith("codeact-case-study-page.html"),
+			),
+		);
+	} finally {
+		await rm(outputDir, { recursive: true, force: true });
+	}
+});
+
 test("tagged LLM artifact bundle avoids HTML-in-JSON escaping", async () => {
 	const outputDir = await mkdtemp(join(tmpdir(), "pi-temporal-harness-"));
 	try {
@@ -586,3 +836,11 @@ test("tagged LLM artifact bundle avoids HTML-in-JSON escaping", async () => {
 		await rm(outputDir, { recursive: true, force: true });
 	}
 });
+
+function restoreEnv(key: string, value: string | undefined): void {
+	if (value === undefined) {
+		delete process.env[key];
+		return;
+	}
+	process.env[key] = value;
+}

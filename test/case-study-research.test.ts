@@ -90,6 +90,38 @@ test("collectTemporalCaseStudies can use Pi-discovered URLs instead of local dis
 	assert.equal(result.records.length, 2);
 });
 
+test("collection can delegate record extraction instead of using HTML heuristics", async () => {
+	let extractionCalls = 0;
+	const result = await collectTemporalCaseStudies({
+		mode: "react",
+		targetCount: 1,
+		pageBudget: 1,
+		discoveredUrls: [mockCaseStudyUrls[0]],
+		fetchText: async () =>
+			"<html><body><main>semantic page payload</main></body></html>",
+		extractRecord: async (url, html) => {
+			extractionCalls += 1;
+			assert.match(html, /semantic page payload/);
+			return {
+				url,
+				slug: "anz-story",
+				company: "ANZ",
+				headline: "ANZ uses Temporal to run resilient customer workflows",
+				summary:
+					"ANZ uses Temporal to orchestrate critical business workflows with durable execution.",
+				evidenceQuote:
+					"ANZ reduced operational risk by keeping workflow state durable while workers may fail.",
+				temporalValue:
+					"ANZ uses Temporal to orchestrate critical business workflows with durable execution.",
+				sourceType: "Temporal case study",
+			};
+		},
+	});
+
+	assert.equal(extractionCalls, 1);
+	assert.equal(result.records[0]?.company, "ANZ");
+});
+
 test("ReAct collection honors model-selected concurrency instead of forcing one lane", async () => {
 	const baseFetch = makeTemporalMockFetch();
 	let active = 0;

@@ -22,7 +22,7 @@ test("agent ladder explains ReAct and CodeAct with developer code", () => {
 	assert.match(codeact.definition, /bash escape hatch/);
 	assert.ok(
 		codeact.snippets.some((snippet) =>
-			snippet.code.includes("temporal skill context load"),
+			snippet.code.includes("temporal agent skill load"),
 		),
 	);
 	assert.ok(

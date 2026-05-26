@@ -7,6 +7,10 @@ export const CODEACT_CONCURRENCY = 8;
 
 export type CaseStudyResearchMode = "react" | "codeact" | "workflow";
 export type FetchText = (url: string) => Promise<string>;
+export type ExtractCaseStudyRecord = (
+	url: string,
+	html: string,
+) => CaseStudyRecord | undefined | Promise<CaseStudyRecord | undefined>;
 
 export interface CaseStudyRecord {
 	url: string;
@@ -56,6 +60,7 @@ interface CollectOptions {
 	pageBudget?: number;
 	concurrency?: number;
 	fetchText?: FetchText;
+	extractRecord?: ExtractCaseStudyRecord;
 	discoveredUrls?: string[];
 	sourceRoots?: string[];
 }
@@ -79,6 +84,7 @@ export async function collectTemporalCaseStudies(
 	const startedAtMs = Date.now();
 	const startedAt = new Date(startedAtMs).toISOString();
 	const fetchText = options.fetchText ?? defaultFetchText;
+	const extractRecord = options.extractRecord ?? extractCaseStudyRecordFromHtml;
 	const targetCount = options.targetCount ?? CASE_STUDY_TARGET_COUNT;
 	const pageBudget =
 		options.pageBudget ??
@@ -102,14 +108,19 @@ export async function collectTemporalCaseStudies(
 	if (concurrency === 1) {
 		for (const url of attemptedUrls) {
 			if (records.length >= targetCount) break;
-			const result = await fetchExtractWithRetry(url, fetchText, maxAttempts);
+			const result = await fetchExtractWithRetry(
+				url,
+				fetchText,
+				extractRecord,
+				maxAttempts,
+			);
 			if (result.record) records.push(result.record);
 			if (result.failure) failures.push(result.failure);
 			retries += result.retries;
 		}
 	} else {
 		const results = await mapLimit(attemptedUrls, concurrency, (url) =>
-			fetchExtractWithRetry(url, fetchText, maxAttempts),
+			fetchExtractWithRetry(url, fetchText, extractRecord, maxAttempts),
 		);
 		for (const result of results) {
 			if (result.record && records.length < targetCount)
@@ -437,6 +448,7 @@ export function isTemporalCaseStudyUrl(value: string): boolean {
 async function fetchExtractWithRetry(
 	url: string,
 	fetchText: FetchText,
+	extractRecord: ExtractCaseStudyRecord,
 	maxAttempts: number,
 ): Promise<{
 	record?: CaseStudyRecord;
@@ -445,24 +457,37 @@ async function fetchExtractWithRetry(
 }> {
 	let lastError: unknown;
 	for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+		let html: string;
 		try {
-			const html = await fetchText(url);
-			const record = extractCaseStudyRecordFromHtml(url, html);
-			if (!record) {
-				return {
-					failure: {
-						url,
-						step: "extract",
-						reason: "Page did not contain a valid Temporal case-study record.",
-						attempts: attempt,
-						retryable: false,
-					},
-					retries: attempt - 1,
-				};
-			}
-			return { record, retries: attempt - 1 };
+			html = await fetchText(url);
 		} catch (error) {
 			lastError = error;
+			continue;
+		}
+		try {
+			const record = await extractRecord(url, html);
+			if (record) return { record, retries: attempt - 1 };
+			return {
+				failure: {
+					url,
+					step: "extract",
+					reason: "Page did not contain a valid Temporal case-study record.",
+					attempts: attempt,
+					retryable: false,
+				},
+				retries: attempt - 1,
+			};
+		} catch (error) {
+			return {
+				failure: {
+					url,
+					step: "extract",
+					reason: errorMessage(error),
+					attempts: attempt,
+					retryable: false,
+				},
+				retries: attempt - 1,
+			};
 		}
 	}
 	return {

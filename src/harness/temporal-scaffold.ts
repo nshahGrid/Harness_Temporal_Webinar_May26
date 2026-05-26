@@ -62,7 +62,7 @@ export const temporalPrimitiveCatalog: TemporalPrimitive[] = [
 		label: "Task queue",
 		whyItMatters:
 			"Connects workflow tasks to workers that run the case-study activities.",
-		codeSignal: "pi-gtm-demo-codeact",
+		codeSignal: "TEMPORAL_TASK_QUEUE",
 	},
 	{
 		id: "worker",
@@ -80,50 +80,69 @@ export const temporalPrimitiveCatalog: TemporalPrimitive[] = [
 	},
 ];
 
+export const temporalDeveloperSkillName = "temporal-developer";
+
+const temporalDeveloperSkillPath = "skills/temporal-developer/SKILL.md";
+
 const temporalSkillReferences = [
 	{
 		file: "python.md",
 		url: "https://github.com/temporalio/skill-temporal-developer/blob/main/references/python/python.md",
-		loadedContext:
+		generationUse:
 			"workflow/activity/worker/client structure, file separation, decorators, and sync activity shape",
 	},
 	{
 		file: "determinism.md",
 		url: "https://github.com/temporalio/skill-temporal-developer/blob/main/references/python/determinism.md",
-		loadedContext:
+		generationUse:
 			"workflow determinism constraints; network, filesystem, and subprocess work belongs in Activities",
 	},
 	{
 		file: "patterns.md",
 		url: "https://github.com/temporalio/skill-temporal-developer/blob/main/references/python/patterns.md",
-		loadedContext:
+		generationUse:
 			"Signals, Queries, wait conditions, and bounded parallel activity execution",
 	},
 	{
 		file: "error-handling.md",
 		url: "https://github.com/temporalio/skill-temporal-developer/blob/main/references/python/error-handling.md",
-		loadedContext:
+		generationUse:
 			"ApplicationError, retryable/non-retryable failures, and RetryPolicy",
 	},
 	{
 		file: "ai-patterns.md",
 		url: "https://github.com/temporalio/skill-temporal-developer/blob/main/references/python/ai-patterns.md",
-		loadedContext:
+		generationUse:
 			"parallel research, partial failure handling, and letting Temporal own retries",
 	},
 	{
 		file: "testing.md",
 		url: "https://github.com/temporalio/skill-temporal-developer/blob/main/references/python/testing.md",
-		loadedContext: "mocked activities plus workflow signal/query tests",
+		generationUse: "mocked activities plus workflow signal/query tests",
 	},
 ];
 
-export function buildTemporalSkillContextWindow(): string {
+export function buildTemporalAgentSkillGenerationSummary(): string {
 	return [
-		"Temporal Python skill context loaded into the CodeAct prompt window:",
+		"Temporal Agent Skill configured for CodeAct scaffold generation:",
+		`- Skill: ${temporalDeveloperSkillName}`,
+		`- Pi scaffold-generation calls pass --skill ${temporalDeveloperSkillPath}.`,
+		"- The task prompt supplies the demo-specific bash-heredoc output contract; the Temporal Agent Skill supplies Temporal SDK code-generation guidance.",
+		"- The generated scaffold must still pass the harness parser, py_compile, generated-code lint, and Temporal primitive validation before it can run.",
 		...temporalSkillReferences.map(
 			(reference) =>
-				`- ${reference.file}: ${reference.loadedContext}\n  Source: ${reference.url}`,
+				`- ${reference.file}: ${reference.generationUse}\n  Source: ${reference.url}`,
+		),
+	].join("\n");
+}
+
+export function buildTemporalValidationReferenceSummary(): string {
+	return [
+		"Temporal Python reference checks used during and after CodeAct generation:",
+		"The scaffold-generation Pi call loads the Temporal Agent Skill; these same Python references also back the harness validation gates.",
+		...temporalSkillReferences.map(
+			(reference) =>
+				`- ${reference.file}: ${reference.generationUse}\n  Source: ${reference.url}`,
 		),
 	].join("\n");
 }
@@ -259,7 +278,7 @@ export function parseTemporalScaffoldSpecFromBash(
 }
 
 export function createTemporalScaffoldSpec(): TemporalScaffoldSpec {
-	const taskQueue = "pi-gtm-demo-codeact";
+	const taskQueue = "TEMPORAL_TASK_QUEUE";
 	return {
 		scenarioName: "Temporal customer-proof case-study research",
 		taskQueue,
@@ -286,18 +305,18 @@ export function createTemporalScaffoldSpec(): TemporalScaffoldSpec {
 				path: "src/workflows.py",
 				purpose:
 					"Durable workflow with retry policy, bounded parallel activities, signals, and queries.",
-				contents: workflowSource(taskQueue),
+				contents: workflowSource(),
 			},
 			{
 				path: "src/worker.py",
 				purpose: "Worker process bound to the generated task queue.",
-				contents: workerSource(taskQueue),
+				contents: workerSource(),
 			},
 			{
 				path: "src/client.py",
 				purpose:
 					"Client starter that demonstrates workflow start, query, pause, and approval signal.",
-				contents: clientSource(taskQueue),
+				contents: clientSource(),
 			},
 			{
 				path: "src/extractor.py",
@@ -487,6 +506,23 @@ export async function validateTemporalScaffold(
 				"@activity.defn",
 				"ApplicationError",
 				"fetch_and_extract_case_study",
+				"CASE_STUDY_PATTERN",
+				"[a-z0-9\\-/]+",
+				"urllib.error.HTTPError",
+				"err.code == 404",
+				"subprocess.run",
+				"PI_COMMAND",
+				"PI_EXTRACTION_CACHE_PATH",
+				"build_extraction_prompt",
+				"extract_assistant_text",
+				"text_from_content",
+				"parse_extraction_response",
+				"parse_json_object",
+				"parse_labeled_fields",
+				"read_extraction_cache",
+				"write_extraction_cache",
+				"last_assistant",
+				'event.get("messages")',
 				"evidence_quote",
 				"temporal_value",
 			],
@@ -504,7 +540,8 @@ export async function validateTemporalScaffold(
 			includes: [
 				"Worker(",
 				"activity_executor",
-				"pi-gtm-demo",
+				"required_env",
+				"TEMPORAL_TASK_QUEUE",
 				"TEMPORAL_ADDRESS",
 				"TEMPORAL_API_KEY",
 				"api_key",
@@ -521,10 +558,14 @@ export async function validateTemporalScaffold(
 				"args=[",
 				"approve_export",
 				"current_state",
+				"workflow_query_failed",
 				"CODEACT_WORKFLOW_ID",
 				"CODEACT_TEMPORAL_EVENT",
 				'"event"',
 				"state=result",
+				"result_state",
+				"state_list_count",
+				"TEMPORAL_TASK_QUEUE",
 				"TEMPORAL_ADDRESS",
 				"TEMPORAL_API_KEY",
 				"api_key",
@@ -560,6 +601,77 @@ export async function validateTemporalScaffold(
 	return passed;
 }
 
+function extractPythonCalls(contents: string, callee: string): string[] {
+	const calls: string[] = [];
+	const marker = `${callee}(`;
+	let searchIndex = 0;
+	while (searchIndex < contents.length) {
+		const start = contents.indexOf(marker, searchIndex);
+		if (start < 0) break;
+		let depth = 0;
+		let quote: string | undefined;
+		let tripleQuote = false;
+		let escaped = false;
+		let foundEnd = false;
+		for (
+			let index = start + callee.length;
+			index < contents.length;
+			index += 1
+		) {
+			const character = contents[index];
+			if (quote) {
+				if (escaped) {
+					escaped = false;
+					continue;
+				}
+				if (!tripleQuote && character === "\\") {
+					escaped = true;
+					continue;
+				}
+				if (
+					tripleQuote &&
+					character === quote &&
+					contents[index + 1] === quote &&
+					contents[index + 2] === quote
+				) {
+					index += 2;
+					quote = undefined;
+					tripleQuote = false;
+					continue;
+				}
+				if (!tripleQuote && character === quote) {
+					quote = undefined;
+					continue;
+				}
+				continue;
+			}
+			if (character === '"' || character === "'") {
+				quote = character;
+				tripleQuote =
+					contents[index + 1] === character &&
+					contents[index + 2] === character;
+				if (tripleQuote) index += 2;
+				continue;
+			}
+			if (character === "(") {
+				depth += 1;
+				continue;
+			}
+			if (character === ")") {
+				depth -= 1;
+				if (depth === 0) {
+					calls.push(contents.slice(start, index + 1));
+					searchIndex = index + 1;
+					foundEnd = true;
+					break;
+				}
+			}
+		}
+		if (!foundEnd) searchIndex = start + marker.length;
+	}
+	return calls;
+}
+
 async function lintGeneratedPythonScaffold(targetDir: string): Promise<string> {
 	const failures: string[] = [];
 	const requirements = await readFile(
@@ -569,6 +681,11 @@ async function lintGeneratedPythonScaffold(targetDir: string): Promise<string> {
 	for (const file of generatedPythonFiles) {
 		const contents = await readFile(join(targetDir, file), "utf8");
 		if (file === "src/activities.py") {
+			if (/@activity\.defn\s+async\s+def\s+/.test(contents)) {
+				failures.push(
+					"src/activities.py activity functions must be synchronous def functions, not async def, so blocking urllib and subprocess.run work runs in the worker activity_executor",
+				);
+			}
 			if (
 				/\bimport\s+requests\b|\bfrom\s+requests\b/.test(contents) &&
 				!/^requests\b/im.test(requirements)
@@ -590,6 +707,72 @@ async function lintGeneratedPythonScaffold(targetDir: string): Promise<string> {
 					"requirements.txt must include lxml because generated code references lxml",
 				);
 			}
+			if (/resources\/case-studies\/\[\^\\s/.test(contents)) {
+				failures.push(
+					"src/activities.py must use a bounded Temporal case-study URL regex such as [a-z0-9\\-/]+, not a broad [^\\s...] pattern that captures punctuation",
+				);
+			}
+			if (!/err\.code\s*==\s*404/.test(contents)) {
+				failures.push(
+					"src/activities.py must handle urllib.error.HTTPError 404 as a non-retryable missing case-study page",
+				);
+			}
+			for (const applicationError of extractPythonCalls(
+				contents,
+				"ApplicationError",
+			)) {
+				if (
+					/invalid JSON/i.test(applicationError) &&
+					!/non_retryable\s*=\s*True/.test(applicationError)
+				) {
+					failures.push(
+						"src/activities.py must mark invalid Pi JSON extraction responses as non_retryable=True",
+					);
+					break;
+				}
+			}
+			if (
+				/json\.loads\s*\(\s*completed\.stdout/.test(contents) ||
+				/json\.loads\s*\(\s*output\s*\)/.test(contents)
+			) {
+				failures.push(
+					"src/activities.py must parse Pi --mode json NDJSON with extract_assistant_text(completed.stdout) and parse_json_object(...), not json.loads(completed.stdout) or json.loads(output)",
+				);
+			}
+			if (/return\s+json\.loads\(\s*text(?:\.strip\(\))?\s*\)/.test(contents)) {
+				failures.push(
+					"src/activities.py must not require the entire assistant answer to be JSON; parse the first balanced JSON object or fall back to labeled fields",
+				);
+			}
+			if (
+				/event\.get\(["']type["']\)\s*==\s*["']agent_end["'][\s\S]{0,500}event\.get\(["']content["']/.test(
+					contents,
+				)
+			) {
+				failures.push(
+					'src/activities.py must read assistant text from agent_end messages via event.get("messages"), not top-level event.get("content")',
+				);
+			}
+			if (
+				/def\s+export_marketing_html[\s\S]*record\.(?:url|company|headline|summary|evidence_quote|temporal_value)/.test(
+					contents,
+				) &&
+				!/def\s+coerce_case_study_record|isinstance\s*\(\s*record\s*,\s*dict\s*\)/.test(
+					contents,
+				)
+			) {
+				failures.push(
+					"src/activities.py must normalize dict-shaped CaseStudyRecord payloads before export_marketing_html reads fields because Temporal may decode list items as dictionaries",
+				);
+			}
+		}
+		if (
+			file === "src/client.py" &&
+			/result\.(?:records|failed_pages|attempted_urls)/.test(contents)
+		) {
+			failures.push(
+				"src/client.py must normalize handle.result() with to_jsonable/result_state before counting records, failed_pages, or attempted_urls because Temporal Cloud may decode WorkflowState as a dict",
+			);
 		}
 		if (
 			file === "src/workflows.py" &&
@@ -601,10 +784,10 @@ async function lintGeneratedPythonScaffold(targetDir: string): Promise<string> {
 		}
 		if (
 			file === "src/workflows.py" &&
-			/discovered_urls\s*\[\s*len\s*\(/.test(contents)
+			/execute_activity\([\s\S]*task_queue\s*=/.test(contents)
 		) {
 			failures.push(
-				"src/workflows.py must map activity results with zip(batch, results), not mutable discovered_urls[len(...)] indexing",
+				"src/workflows.py must omit task_queue on execute_activity calls so generated activities use the workflow's runtime TEMPORAL_TASK_QUEUE",
 			);
 		}
 		if (
@@ -621,6 +804,22 @@ async function lintGeneratedPythonScaffold(targetDir: string): Promise<string> {
 		) {
 			failures.push(
 				"src/workflows.py must not drop activity results by requiring isinstance(result, CaseStudyRecord); Temporal payload conversion may return dict-shaped records, so append valid non-exception results or normalize dicts before appending",
+			);
+		}
+		if (
+			file === "src/workflows.py" &&
+			/workflow\.info\(\)\.workflow_execution_timeout/.test(contents)
+		) {
+			failures.push(
+				"src/workflows.py must not use workflow.info().workflow_execution_timeout; set explicit timedelta start_to_close_timeout values for activities",
+			);
+		}
+		if (
+			file === "src/workflows.py" &&
+			/workflow\.logger\.\w+\(\s*f["'][^"']*\{result\}/.test(contents)
+		) {
+			failures.push(
+				"src/workflows.py must not stringify activity exception objects in workflow logs; log the URL or exception type only so workflow tasks keep yielding quickly",
 			);
 		}
 		const lines = contents.split("\n");
@@ -645,6 +844,11 @@ async function lintGeneratedPythonScaffold(targetDir: string): Promise<string> {
 			if (file === "src/client.py" && line.includes("json.dumps(event)")) {
 				failures.push(
 					`${file}:${lineNumber} serialize dataclass payloads with to_jsonable before json.dumps`,
+				);
+			}
+			if (line.includes("pi-gtm-demo-codeact")) {
+				failures.push(
+					`${file}:${lineNumber} remove stale pi-gtm-demo-codeact task queue literal; generated code must use runtime TEMPORAL_TASK_QUEUE`,
 				);
 			}
 			if (/case-studies\/example|example-\d+|Company-\{?/.test(line)) {
@@ -706,150 +910,451 @@ class ResearchState:
 }
 
 function activitiesSource(): string {
-	return `import html
-import re
-import urllib.error
-import urllib.request
-from typing import Optional
-from urllib.parse import urlparse
+	return `import hashlib
+	import html
+	import json
+	import os
+	import re
+	import shlex
+	import subprocess
+	import threading
+	import urllib.error
+	import urllib.request
+	from datetime import datetime, timezone
+	from pathlib import Path
+	from typing import Optional
+	from urllib.parse import urlparse
 
-from temporalio import activity
-from temporalio.exceptions import ApplicationError
+	from temporalio import activity
+	from temporalio.exceptions import ApplicationError
 
-from models import CaseStudyRecord
+	from models import CaseStudyRecord
 
-TEMPORAL_CUSTOMER_STORIES_URL = "https://temporal.io/in-use"
-TEMPORAL_SITEMAP_URL = "https://temporal.io/sitemap.xml"
-CASE_STUDY_PATTERN = re.compile(r"https://temporal\\.io/resources/case-studies/[a-z0-9\\-/]+", re.I)
-
-
-@activity.defn
-def discover_case_study_urls(
-    start_url: str = TEMPORAL_CUSTOMER_STORIES_URL,
-    sitemap_url: str = TEMPORAL_SITEMAP_URL,
-) -> list[str]:
-    urls: list[str] = []
-    for source in (start_url, sitemap_url):
-        page = fetch_text(source)
-        urls.extend(CASE_STUDY_PATTERN.findall(page))
-        sitemap_matches = re.finditer(
-            r"<loc>\\s*([^<]+?/resources/case-studies/[^<]+?)\\s*</loc>",
-            page,
-        )
-        urls.extend(match.group(1).strip() for match in sitemap_matches)
-    return sorted({normalize_url(url) for url in urls if is_case_study_url(url)})
+	TEMPORAL_CUSTOMER_STORIES_URL = "https://temporal.io/in-use"
+	TEMPORAL_SITEMAP_URL = "https://temporal.io/sitemap.xml"
+	CASE_STUDY_PATTERN = re.compile(r"https://temporal\\.io/resources/case-studies/[a-z0-9\\-/]+", re.I)
+	PI_EXTRACTION_HTML_LIMIT = 45000
+	PI_EXTRACTION_CACHE_VERSION = "pi-case-study-extraction-v1"
+	PI_EXTRACTION_CACHE_PATH = os.getenv("PI_EXTRACTION_CACHE_PATH")
+	PI_EXTRACTION_CACHE_LOCK = threading.Lock()
 
 
-@activity.defn
-def fetch_and_extract_case_study(url: str) -> CaseStudyRecord:
-    try:
-        page = fetch_text(url)
-    except urllib.error.HTTPError as err:
-        if err.code == 404:
-            raise ApplicationError(
-                f"Missing case-study page: {url}",
-                type="NotFound",
-                non_retryable=True,
-            ) from err
-        raise ApplicationError(
-            f"Retryable HTTP failure for {url}: {err.code}",
-            type="FetchFailure",
-        ) from err
-    record = extract_record(url, page)
-    if record is None:
-        raise ApplicationError(
-            f"Not a valid Temporal case-study page: {url}",
-            type="ValidationError",
-            non_retryable=True,
-        )
-    return record
+	@activity.defn
+	def discover_case_study_urls(
+	    start_url: str = TEMPORAL_CUSTOMER_STORIES_URL,
+	    sitemap_url: str = TEMPORAL_SITEMAP_URL,
+	) -> list[str]:
+	    urls: list[str] = []
+	    for source in (start_url, sitemap_url):
+	        page = fetch_text(source)
+	        urls.extend(CASE_STUDY_PATTERN.findall(page))
+	        sitemap_matches = re.finditer(
+	            r"<loc>\\s*([^<]+?/resources/case-studies/[^<]+?)\\s*</loc>",
+	            page,
+	        )
+	        urls.extend(match.group(1).strip() for match in sitemap_matches)
+	    return sorted({normalize_url(url) for url in urls if is_case_study_url(url)})
 
 
-@activity.defn
-def export_marketing_html(records: list[CaseStudyRecord]) -> str:
-    cards = "\\n".join(
-        "<article>"
-        f"<h2>{html.escape(record.company)}</h2>"
-        f"<p>{html.escape(record.temporal_value)}</p>"
-        f"<a href='{html.escape(record.url)}'>Source</a>"
-        "</article>"
-        for record in records
-    )
-    return f"<!doctype html><html><body><h1>Temporal customer proof</h1>{cards}</body></html>"
+	@activity.defn
+	def fetch_and_extract_case_study(url: str) -> CaseStudyRecord:
+	    try:
+	        page = fetch_text(url)
+	    except urllib.error.HTTPError as err:
+	        if err.code == 404:
+	            raise ApplicationError(
+	                f"Missing case-study page: {url}",
+	                type="NotFound",
+	                non_retryable=True,
+	            ) from err
+	        raise ApplicationError(
+	            f"Retryable HTTP failure for {url}: {err.code}",
+	            type="FetchFailure",
+	        ) from err
+	    try:
+	        record = extract_record(url, page)
+	    except ApplicationError:
+	        raise
+	    except Exception as err:
+	        raise ApplicationError(
+	            f"Pi runtime extraction failed for {url}: {err}",
+	            type="ExtractionFailure",
+	        ) from err
+	    if record is None:
+	        raise ApplicationError(
+	            f"Not a valid Temporal case-study page: {url}",
+	            type="ValidationError",
+	            non_retryable=True,
+	        )
+	    return record
 
 
-def fetch_text(url: str) -> str:
-    request = urllib.request.Request(url, headers={"User-Agent": "pi-codeact-temporal-demo/0.1"})
-    with urllib.request.urlopen(request, timeout=20) as response:
-        return response.read().decode("utf-8", errors="replace")
+	@activity.defn
+	def export_marketing_html(records: list[CaseStudyRecord]) -> str:
+	    normalized_records = [coerce_case_study_record(record) for record in records]
+	    cards = "\\n".join(
+	        "<article>"
+	        f"<h2>{html.escape(record.company)}</h2>"
+	        f"<p>{html.escape(record.temporal_value)}</p>"
+	        f"<a href='{html.escape(record.url)}'>Source</a>"
+	        "</article>"
+	        for record in normalized_records
+	    )
+	    return f"<!doctype html><html><body><h1>Temporal customer proof</h1>{cards}</body></html>"
 
 
-def extract_record(url: str, page: str) -> Optional[CaseStudyRecord]:
-    if not is_case_study_url(url):
-        return None
-    headline_match = re.search(
-        r"<h1[^>]*>(.*?)</h1>",
-        page,
-        re.I | re.S,
-    ) or re.search(r"<title[^>]*>(.*?)</title>", page, re.I | re.S)
-    headline = clean(headline_match.group(1) if headline_match else slug_company(url))
-    if not headline or "404" in headline.lower():
-        return None
-    text = clean(re.sub(r"<[^>]+>", " ", page))
-    sentences = [
-        part.strip()
-        for part in re.split(r"(?<=[.!?])\\s+", text)
-        if len(part.strip()) > 60
-    ]
-    temporal_sentence = next(
-        (part for part in sentences if "Temporal" in part),
-        f"{slug_company(url)} uses Temporal for durable execution.",
-    )
-    evidence = next((part for part in sentences if part != temporal_sentence), temporal_sentence)
-    company = infer_company(headline, url)
-    return CaseStudyRecord(
-        url=normalize_url(url),
-        company=company,
-        headline=headline,
-        summary=evidence,
-        evidence_quote=evidence,
-        temporal_value=temporal_sentence,
-    )
+	def coerce_case_study_record(record: object) -> CaseStudyRecord:
+	    if isinstance(record, CaseStudyRecord):
+	        return record
+	    if isinstance(record, dict):
+	        return CaseStudyRecord(
+	            url=str(record.get("url") or ""),
+	            company=str(record.get("company") or ""),
+	            headline=str(record.get("headline") or ""),
+	            summary=str(record.get("summary") or ""),
+	            evidence_quote=str(record.get("evidence_quote") or record.get("evidenceQuote") or ""),
+	            temporal_value=str(record.get("temporal_value") or record.get("temporalValue") or ""),
+	            industry=payload_string(record, "industry"),
+	            use_case=payload_string(record, "use_case", "useCase"),
+	        )
+	    raise ApplicationError(
+	        f"Unsupported case-study record payload: {type(record).__name__}",
+	        type="ValidationError",
+	        non_retryable=True,
+	    )
 
 
-def infer_company(headline: str, url: str) -> str:
-    patterns = [
-        r"^(.+?)\\s+(?:uses|migrates|builds|runs|orchestrates|saves|improves|scales)\\b",
-        r"^How\\s+(.+?)\\s+(?:uses|built|builds|ensures|simplifies|aims|delivers|migrated)\\b",
-        r"^(.+?):\\s+",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, headline, re.I)
-        if match:
-            return match.group(1).strip().title()
-    return slug_company(url)
+	def fetch_text(url: str) -> str:
+	    request = urllib.request.Request(url, headers={"User-Agent": "pi-codeact-temporal-demo/0.1"})
+	    with urllib.request.urlopen(request, timeout=20) as response:
+	        return response.read().decode("utf-8", errors="replace")
 
 
-def clean(value: str) -> str:
-    return html.unescape(re.sub(r"\\s+", " ", value)).strip()
+	def extract_record(url: str, page: str) -> Optional[CaseStudyRecord]:
+	    if not is_case_study_url(url):
+	        return None
+	    payload = run_pi_extraction(build_extraction_prompt(url, page))
+	    valid = payload.get("valid")
+	    if valid is False or (isinstance(valid, str) and valid.lower() in {"false", "no", "invalid"}):
+	        return None
+	    return record_from_payload(url, payload)
 
 
-def normalize_url(url: str) -> str:
-    return url.rstrip("/")
+	def run_pi_extraction(prompt: str) -> dict[str, object]:
+	    cache_key = extraction_cache_key(prompt)
+	    cached = read_extraction_cache(cache_key)
+	    if cached is not None:
+	        return cached
+	    command = shlex.split(os.getenv("PI_COMMAND", "pi"))
+	    try:
+	        completed = subprocess.run(
+	            [
+	                *command,
+	                "--mode",
+	                "json",
+	                "--no-session",
+	                "--no-tools",
+	                "-p",
+	                prompt,
+	            ],
+	            text=True,
+	            capture_output=True,
+	            timeout=180,
+	            check=False,
+	        )
+	    except FileNotFoundError as err:
+	        raise ApplicationError(
+	            "Pi runtime is unavailable for semantic case-study extraction.",
+	            type="PiRuntimeUnavailable",
+	            non_retryable=True,
+	        ) from err
+	    except subprocess.TimeoutExpired as err:
+	        raise ApplicationError(
+	            "Pi runtime extraction timed out.",
+	            type="PiRuntimeTimeout",
+	        ) from err
+	    if completed.returncode != 0:
+	        raise ApplicationError(
+	            f"Pi runtime extraction exited {completed.returncode}: {completed.stderr or completed.stdout}",
+	            type="PiRuntimeFailure",
+	        )
+	    assistant_text = extract_assistant_text(completed.stdout)
+	    try:
+	        parsed = parse_extraction_response(assistant_text or completed.stdout)
+	    except (ValueError, json.JSONDecodeError) as err:
+	        raise ApplicationError(
+	            "Pi extraction response could not be parsed into fields.",
+	            type="ValidationError",
+	            non_retryable=True,
+	        ) from err
+	    if not isinstance(parsed, dict):
+	        raise ApplicationError(
+	            "Pi extraction response could not be parsed into fields.",
+	            type="ValidationError",
+	            non_retryable=True,
+	        )
+	    write_extraction_cache(cache_key, parsed)
+	    return parsed
 
 
-def is_case_study_url(url: str) -> bool:
-    parsed = urlparse(url)
-    return parsed.netloc == "temporal.io" and parsed.path.startswith("/resources/case-studies/")
+	def extraction_cache_key(prompt: str) -> str:
+	    material = f"{PI_EXTRACTION_CACHE_VERSION}\\n{prompt}".encode("utf-8")
+	    return hashlib.sha256(material).hexdigest()
 
 
-def slug_company(url: str) -> str:
-    slug = urlparse(url).path.rstrip("/").split("/")[-1]
-    return slug.replace("-story", "").replace("-", " ").title()
-`;
+	def read_extraction_cache(cache_key: str) -> Optional[dict[str, object]]:
+	    if not PI_EXTRACTION_CACHE_PATH:
+	        return None
+	    with PI_EXTRACTION_CACHE_LOCK:
+	        try:
+	            raw = Path(PI_EXTRACTION_CACHE_PATH).read_text(encoding="utf-8")
+	            data = json.loads(raw)
+	        except (FileNotFoundError, OSError, json.JSONDecodeError):
+	            return None
+	        entry = (data.get("entries") or {}).get(cache_key)
+	        if not isinstance(entry, dict):
+	            return None
+	        if entry.get("version") != PI_EXTRACTION_CACHE_VERSION:
+	            return None
+	        payload = entry.get("payload")
+	        return payload if isinstance(payload, dict) else None
+
+
+	def write_extraction_cache(cache_key: str, payload: dict[str, object]) -> None:
+	    if not PI_EXTRACTION_CACHE_PATH:
+	        return
+	    with PI_EXTRACTION_CACHE_LOCK:
+	        path = Path(PI_EXTRACTION_CACHE_PATH)
+	        try:
+	            data = json.loads(path.read_text(encoding="utf-8"))
+	        except (FileNotFoundError, OSError, json.JSONDecodeError):
+	            data = {"version": 1, "entries": {}}
+	        entries = data.setdefault("entries", {})
+	        if not isinstance(entries, dict):
+	            data["entries"] = {}
+	            entries = data["entries"]
+	        entries[cache_key] = {
+	            "version": PI_EXTRACTION_CACHE_VERSION,
+	            "stored_at": datetime.now(timezone.utc).isoformat(),
+	            "payload": payload,
+	        }
+	        path.parent.mkdir(parents=True, exist_ok=True)
+	        path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
+
+
+	def build_extraction_prompt(url: str, page: str) -> str:
+	    bounded_page = truncate_page(page)
+	    parts = [
+	        "You are Pi extracting one structured customer-proof record from a Temporal-owned case-study page.",
+	        "Use semantic reading of the supplied page content, not regex or local fixtures.",
+	        "Use only facts present in the supplied page content. Do not invent customers, metrics, quotes, use cases, or claims.",
+	        'If the page is not a valid Temporal customer case study or there is not enough evidence, return {"valid":false,"reason":"short reason"} or a short labeled invalid response.',
+	        "Prefer one JSON object with fields valid, url, company, headline, summary, evidence_quote, temporal_value, industry, and use_case.",
+	        "JSON does not have to be the only text in the response; labeled fields are acceptable.",
+	        "Labeled field fallback shape: Company:, Headline:, Summary:, Evidence quote:, Temporal value:, Industry:, Use case:.",
+	        "Required valid fields are company, headline, summary, evidence_quote, and temporal_value.",
+	        f"Source URL: {url}",
+	        f"Supplied page HTML ({len(page)} characters, {len(bounded_page)} included):",
+	        bounded_page,
+	    ]
+	    return "\\n\\n".join(parts)
+
+
+	def truncate_page(page: str) -> str:
+	    if len(page) <= PI_EXTRACTION_HTML_LIMIT:
+	        return page
+	    head_length = int(PI_EXTRACTION_HTML_LIMIT * 0.72)
+	    tail_length = PI_EXTRACTION_HTML_LIMIT - head_length
+	    omitted = len(page) - PI_EXTRACTION_HTML_LIMIT
+	    return "\\n".join(
+	        [
+	            page[:head_length],
+	            f"<!-- omitted {omitted} middle characters -->",
+	            page[-tail_length:],
+	        ]
+	    )
+
+
+	def extract_assistant_text(stdout: str) -> str:
+	    last_assistant = ""
+	    for line in stdout.splitlines():
+	        if not line.strip():
+	            continue
+	        try:
+	            event = json.loads(line)
+	        except json.JSONDecodeError:
+	            continue
+	        if event.get("type") == "message_end":
+	            message = event.get("message") or {}
+	            if message.get("role") == "assistant":
+	                last_assistant = text_from_content(message.get("content"))
+	        if event.get("type") == "agent_end":
+	            messages = event.get("messages") or []
+	            for message in reversed(messages):
+	                if message.get("role") == "assistant":
+	                    last_assistant = text_from_content(message.get("content"))
+	                    break
+	    return last_assistant
+
+
+	def text_from_content(content: object) -> str:
+	    if isinstance(content, str):
+	        return content
+	    if not isinstance(content, list):
+	        return ""
+	    parts = []
+	    for item in content:
+	        if isinstance(item, dict) and item.get("type") == "text":
+	            text = item.get("text")
+	            if isinstance(text, str):
+	                parts.append(text)
+	    return "".join(parts)
+
+
+	FIELD_ALIASES = {
+	    "valid": "valid",
+	    "sourceurl": "url",
+	    "url": "url",
+	    "company": "company",
+	    "customer": "company",
+	    "headline": "headline",
+	    "title": "headline",
+	    "summary": "summary",
+	    "evidencequote": "evidence_quote",
+	    "quote": "evidence_quote",
+	    "temporalvalue": "temporal_value",
+	    "value": "temporal_value",
+	    "industry": "industry",
+	    "usecase": "use_case",
+	}
+
+
+	def parse_extraction_response(text: str) -> dict[str, object]:
+	    try:
+	        parsed = parse_json_object(text)
+	        if isinstance(parsed, dict):
+	            return parsed
+	    except (ValueError, json.JSONDecodeError):
+	        pass
+	    fields = parse_labeled_fields(text)
+	    if fields:
+	        return fields
+	    raise ValueError("Pi extraction response did not contain parseable fields.")
+
+
+	def parse_json_object(text: str) -> object:
+	    start = text.find("{")
+	    if start < 0:
+	        raise ValueError("Pi extraction response did not contain a JSON object.")
+	    depth = 0
+	    in_string = False
+	    escaped = False
+	    for index in range(start, len(text)):
+	        character = text[index]
+	        if escaped:
+	            escaped = False
+	            continue
+	        if character == "\\\\":
+	            escaped = True
+	            continue
+	        if character == '"':
+	            in_string = not in_string
+	            continue
+	        if in_string:
+	            continue
+	        if character == "{":
+	            depth += 1
+	            continue
+	        if character == "}":
+	            depth -= 1
+	            if depth == 0:
+	                return json.loads(text[start : index + 1])
+	    raise ValueError("Pi extraction response contained an unterminated JSON object.")
+
+
+	def parse_labeled_fields(text: str) -> dict[str, object]:
+	    fields: dict[str, str] = {}
+	    current_key: Optional[str] = None
+	    for raw_line in text.splitlines():
+	        line = raw_line.strip()
+	        if not line:
+	            continue
+	        match = re.match(r"^(?:[-*]\\s*)?(?:\\*\\*)?([A-Za-z][A-Za-z _/-]{1,40})(?:\\*\\*)?\\s*:\\s*(.*)$", line)
+	        if match:
+	            key = FIELD_ALIASES.get(normalize_label(match.group(1)))
+	            if key:
+	                fields[key] = clean_labeled_value(match.group(2))
+	                current_key = key
+	                continue
+	        if current_key:
+	            fields[current_key] = " ".join([fields[current_key], line]).strip()
+	    return fields
+
+
+	def normalize_label(label: str) -> str:
+	    return re.sub(r"[^a-z0-9]", "", label.lower())
+
+
+	def clean_labeled_value(value: str) -> str:
+	    return " ".join(value.strip().strip("'\\"").split())
+
+
+	def record_from_payload(url: str, payload: dict[str, object]) -> CaseStudyRecord:
+	    company = payload_string(payload, "company")
+	    headline = payload_string(payload, "headline")
+	    summary = payload_string(payload, "summary")
+	    evidence_quote = payload_string(payload, "evidence_quote", "evidenceQuote")
+	    temporal_value = payload_string(payload, "temporal_value", "temporalValue")
+	    missing = [
+	        name
+	        for name, value in [
+	            ("company", company),
+	            ("headline", headline),
+	            ("summary", summary),
+	            ("evidence_quote", evidence_quote),
+	            ("temporal_value", temporal_value),
+	        ]
+	        if not value
+	    ]
+	    if missing:
+	        raise ApplicationError(
+	            f"Pi extraction response missing required field(s): {', '.join(missing)}",
+	            type="ValidationError",
+	            non_retryable=True,
+	        )
+	    return CaseStudyRecord(
+	        url=normalize_url(url),
+	        company=company,
+	        headline=headline,
+	        summary=summary,
+	        evidence_quote=evidence_quote,
+	        temporal_value=temporal_value,
+	        industry=payload_string(payload, "industry"),
+	        use_case=payload_string(payload, "use_case", "useCase"),
+	    )
+
+
+	def payload_string(payload: dict[str, object], *keys: str) -> Optional[str]:
+	    for key in keys:
+	        value = payload.get(key)
+	        if isinstance(value, str):
+	            cleaned = " ".join(value.split()).strip()
+	            if cleaned and cleaned.lower() not in {"n/a", "na", "unknown", "null"}:
+	                return cleaned
+	    return None
+
+
+	def normalize_url(url: str) -> str:
+	    return url.rstrip("/")
+
+
+	def is_case_study_url(url: str) -> bool:
+	    parsed = urlparse(url)
+	    return parsed.netloc == "temporal.io" and parsed.path.startswith("/resources/case-studies/")
+	`.replace(/^\t/gm, "");
 }
 
-function workflowSource(taskQueue: string): string {
+function workflowSource(): string {
 	return `from datetime import timedelta
 import asyncio
 
@@ -895,7 +1400,6 @@ class TemporalCaseStudyResearchWorkflow:
             discover_case_study_urls,
             start_to_close_timeout=timedelta(minutes=2),
             retry_policy=retry_policy,
-            task_queue="${taskQueue}",
         )
         self._state.discovered_urls = urls
         self._state.status = "extracting"
@@ -911,7 +1415,6 @@ class TemporalCaseStudyResearchWorkflow:
                     start_to_close_timeout=timedelta(minutes=2),
                     schedule_to_close_timeout=timedelta(minutes=6),
                     retry_policy=retry_policy,
-                    task_queue="${taskQueue}",
                 )
                 for url in batch
             ]
@@ -941,14 +1444,13 @@ class TemporalCaseStudyResearchWorkflow:
                 self._state.records,
                 start_to_close_timeout=timedelta(minutes=1),
                 retry_policy=retry_policy,
-                task_queue="${taskQueue}",
             )
             self._state.status = "completed"
         return self._state
 `;
 }
 
-function workerSource(taskQueue: string): string {
+function workerSource(): string {
 	return `import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import os
@@ -959,7 +1461,15 @@ from temporalio.worker import Worker
 from activities import discover_case_study_urls, fetch_and_extract_case_study, export_marketing_html
 from workflows import TemporalCaseStudyResearchWorkflow
 
-TASK_QUEUE = os.getenv("TEMPORAL_TASK_QUEUE", "${taskQueue}")
+
+def required_env(name: str) -> str:
+    value = os.getenv(name)
+    if not value:
+        raise RuntimeError(f"{name} must be set")
+    return value
+
+
+TASK_QUEUE = required_env("TEMPORAL_TASK_QUEUE")
 
 
 async def main() -> None:
@@ -986,7 +1496,7 @@ if __name__ == "__main__":
 `;
 }
 
-function clientSource(taskQueue: string): string {
+function clientSource(): string {
 	return `import asyncio
 from dataclasses import asdict, is_dataclass
 import json
@@ -997,7 +1507,15 @@ from temporalio.client import Client
 
 from workflows import TemporalCaseStudyResearchWorkflow
 
-TASK_QUEUE = os.getenv("TEMPORAL_TASK_QUEUE", "${taskQueue}")
+
+def required_env(name: str) -> str:
+    value = os.getenv(name)
+    if not value:
+        raise RuntimeError(f"{name} must be set")
+    return value
+
+
+TASK_QUEUE = required_env("TEMPORAL_TASK_QUEUE")
 
 
 def to_jsonable(value):
@@ -1016,6 +1534,11 @@ def emit(event: str, **payload) -> None:
         + json.dumps({"event": event, **to_jsonable(payload)}, sort_keys=True),
         flush=True,
     )
+
+
+def state_list_count(state: object, key: str) -> int:
+    value = state.get(key) if isinstance(state, dict) else getattr(state, key, None)
+    return len(value) if isinstance(value, list) else 0
 
 
 async def main() -> None:
@@ -1043,19 +1566,24 @@ async def main() -> None:
         id=workflow_id,
         task_queue=TASK_QUEUE,
     )
-    state = await handle.query(TemporalCaseStudyResearchWorkflow.current_state)
-    emit("workflow_started", workflow_id=workflow_id, state=state)
+    try:
+        state = await handle.query(TemporalCaseStudyResearchWorkflow.current_state)
+    except Exception as err:
+        emit("workflow_query_failed", workflow_id=workflow_id, error=type(err).__name__)
+    else:
+        emit("workflow_started", workflow_id=workflow_id, state=state)
     if os.getenv("CODEACT_AUTO_APPROVE", "1") == "1":
         await handle.signal(TemporalCaseStudyResearchWorkflow.approve_export, "approved from generated client")
         emit("approval_signal_sent", workflow_id=workflow_id)
     result = await handle.result()
+    result_state = to_jsonable(result)
     emit(
         "workflow_completed",
         workflow_id=workflow_id,
         state=result,
-        records=len(result.records),
-        failures=len(result.failed_pages),
-        attempted=len(result.attempted_urls),
+        records=state_list_count(result_state, "records"),
+        failures=state_list_count(result_state, "failed_pages"),
+        attempted=state_list_count(result_state, "attempted_urls"),
     )
 
 

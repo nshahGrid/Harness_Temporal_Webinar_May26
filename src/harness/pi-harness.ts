@@ -1,4 +1,5 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import {
 	CASE_STUDY_TARGET_COUNT,
@@ -10,7 +11,7 @@ import {
 	defaultFetchText,
 	discoverCaseStudyLinksFromHtml,
 	discoverCaseStudyLinksFromSitemap,
-	extractCaseStudyRecordFromHtml,
+	type ExtractCaseStudyRecord,
 	type FailedPage,
 	type FetchText,
 	isTemporalCaseStudyUrl,
@@ -19,6 +20,7 @@ import {
 	TEMPORAL_CUSTOMER_STORIES_URL,
 	TEMPORAL_SITEMAP_URL,
 } from "../case-study-research.ts";
+import { artifactsDir } from "../paths.ts";
 import {
 	generateTextWithPi,
 	generateTextWithPiDetailed,
@@ -33,11 +35,17 @@ import {
 	shouldRunCodeActTemporalCloud,
 } from "./codeact-temporal-cloud.ts";
 import {
-	buildTemporalSkillContextWindow,
+	runCodeActScaffoldChildWorkflow,
+	shouldRunCodeActScaffoldChildWorkflow,
+} from "./scaffold-child-workflow.ts";
+import {
+	buildTemporalAgentSkillGenerationSummary,
+	buildTemporalValidationReferenceSummary,
 	createTemporalScaffoldSpec,
 	parseTemporalScaffoldSpecFromBash,
 	parseTemporalScaffoldSpecFromLlm,
 	type TemporalScaffoldSpec,
+	temporalDeveloperSkillName,
 	temporalPrimitiveCatalog,
 	validateTemporalScaffold,
 	writeTemporalScaffold,
@@ -81,6 +89,27 @@ interface PiLiveSearchResult {
 	strategy?: Partial<ReactExecutionStrategy>;
 }
 
+interface PiExtractionCacheKey {
+	key: string;
+	promptHash: string;
+	url: string;
+}
+
+interface PiExtractionCacheEntry {
+	version: string;
+	key: string;
+	url: string;
+	promptHash: string;
+	storedAt: string;
+	valid: boolean;
+	record?: CaseStudyRecord;
+}
+
+interface PiExtractionCacheFile {
+	version: number;
+	entries: Record<string, PiExtractionCacheEntry>;
+}
+
 export class PiTemporalHarness {
 	private readonly events: HarnessEvent[] = [];
 	private readonly toolCalls: HarnessToolCall[] = [];
@@ -94,6 +123,7 @@ export class PiTemporalHarness {
 		"react" | "codeact",
 		PiLiveSearchResult
 	>();
+	private readonly piExtractionCache?: PiExtractionCacheStore;
 
 	constructor(
 		private readonly agent: HarnessAgentMode,
@@ -108,8 +138,13 @@ export class PiTemporalHarness {
 			| "codeActConcurrency"
 			| "llmGenerate"
 			| "enableCodeActTemporalCloud"
+			| "enableCodeActScaffoldChildWorkflow"
+			| "enablePiExtractionCache"
+			| "piExtractionCachePath"
 		> = {},
-	) {}
+	) {
+		this.piExtractionCache = createPiExtractionCacheStore(researchOptions);
+	}
 
 	get agentMode(): HarnessAgentMode {
 		return this.agent;
@@ -224,6 +259,7 @@ export class PiTemporalHarness {
 		const result = await collectTemporalCaseStudies({
 			mode: "react",
 			fetchText: this.researchOptions.researchFetchText,
+			extractRecord: this.createPiRuntimeExtractor("react"),
 			targetCount: strategy.targetCount,
 			pageBudget: strategy.pageBudget,
 			concurrency: strategy.concurrency,
@@ -399,6 +435,7 @@ export class PiTemporalHarness {
 		const startedAt = new Date(startedAtMs).toISOString();
 		const fetchText =
 			this.researchOptions.researchFetchText ?? defaultFetchText;
+		const extractRecord = this.createPiRuntimeExtractor("codeact");
 		const targetCount =
 			this.researchOptions.researchTargetCount ?? CASE_STUDY_TARGET_COUNT;
 		const pageBudget =
@@ -460,6 +497,7 @@ export class PiTemporalHarness {
 						workerId,
 						url,
 						fetchText,
+						extractRecord,
 						2,
 					);
 					indexedResults[current] = result;
@@ -592,6 +630,7 @@ export class PiTemporalHarness {
 		workerId: string,
 		url: string,
 		fetchText: FetchText,
+		extractRecord: ExtractCaseStudyRecord,
 		maxAttempts: number,
 	): Promise<{
 		record?: CaseStudyRecord;
@@ -600,24 +639,9 @@ export class PiTemporalHarness {
 	}> {
 		let lastError: unknown;
 		for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+			let html: string;
 			try {
-				const html = await fetchText(url);
-				const record = extractCaseStudyRecordFromHtml(url, html);
-				if (!record) {
-					return {
-						failure: this.failedPage(
-							url,
-							"extract",
-							new Error(
-								"Page did not contain a valid Temporal case-study record.",
-							),
-							attempt,
-							false,
-						),
-						retries: attempt - 1,
-					};
-				}
-				return { record, retries: attempt - 1 };
+				html = await fetchText(url);
 			} catch (error) {
 				lastError = error;
 				if (attempt < maxAttempts) {
@@ -628,6 +652,28 @@ export class PiTemporalHarness {
 						message: `Fetch failed on attempt ${attempt}; Temporal RetryPolicy schedules another activity attempt.`,
 					});
 				}
+				continue;
+			}
+			try {
+				const record = await extractRecord(url, html);
+				if (record) return { record, retries: attempt - 1 };
+				return {
+					failure: this.failedPage(
+						url,
+						"extract",
+						new Error(
+							"Page did not contain a valid Temporal case-study record.",
+						),
+						attempt,
+						false,
+					),
+					retries: attempt - 1,
+				};
+			} catch (error) {
+				return {
+					failure: this.failedPage(url, "extract", error, attempt, false),
+					retries: attempt - 1,
+				};
 			}
 		}
 		return {
@@ -722,12 +768,170 @@ export class PiTemporalHarness {
 		return result;
 	}
 
+	private createPiRuntimeExtractor(
+		mode: "react" | "codeact",
+	): ExtractCaseStudyRecord {
+		return async (url, html) =>
+			this.extractCaseStudyRecordWithPi(mode, url, html);
+	}
+
+	private async extractCaseStudyRecordWithPi(
+		mode: "react" | "codeact",
+		url: string,
+		html: string,
+	): Promise<CaseStudyRecord | undefined> {
+		const purpose = `${mode}-case-study-record-extraction`;
+		const prompt = buildPiCaseStudyExtractionPrompt(url, html);
+		const cacheKey = buildPiExtractionCacheKey(url, prompt);
+		this.recordTool(
+			"pi_runtime_extract_case_study",
+			url,
+			[
+				`purpose=${purpose}`,
+				`htmlCharacters=${html.length}`,
+				`promptCharacters=${prompt.length}`,
+				this.piExtractionCache
+					? `cacheKey=${cacheKey.key.slice(0, 16)}`
+					: "cache=disabled",
+				"Semantic extraction is delegated to Pi runtime; local regex is used only for URL filtering and response validation.",
+			].join("\n"),
+		);
+		const cached = await this.readPiExtractionCache(url, cacheKey);
+		if (cached) {
+			this.recordPiExtractionOutput(url, cached.record);
+			return cached.record;
+		}
+		const markdown = await this.generateWithLlm(
+			{
+				purpose,
+				prompt,
+				skillName: "temporal-case-study-marketing-page",
+				timeoutMs: 180_000,
+			},
+			{ recordPrompt: false },
+		);
+		const record = parsePiCaseStudyExtraction(markdown, url);
+		await this.writePiExtractionCache(url, cacheKey, record);
+		this.recordPiExtractionOutput(url, record);
+		return record;
+	}
+
+	private async readPiExtractionCache(
+		url: string,
+		cacheKey: PiExtractionCacheKey,
+	): Promise<{ record?: CaseStudyRecord } | undefined> {
+		if (!this.piExtractionCache) return undefined;
+		try {
+			const cached = await this.piExtractionCache.get(cacheKey.key);
+			this.recordTool(
+				"pi_runtime_extract_case_study_cache",
+				url,
+				JSON.stringify(
+					{
+						status: cached ? "hit" : "miss",
+						key: cacheKey.key.slice(0, 16),
+						valid: cached?.valid,
+					},
+					null,
+					2,
+				),
+			);
+			if (!cached) return undefined;
+			return {
+				record: cached.record ? cloneCaseStudyRecord(cached.record) : undefined,
+			};
+		} catch (error) {
+			this.recordTool(
+				"pi_runtime_extract_case_study_cache",
+				url,
+				`cache read failed; continuing without cache. ${error instanceof Error ? error.message : String(error)}`,
+			);
+			return undefined;
+		}
+	}
+
+	private async writePiExtractionCache(
+		url: string,
+		cacheKey: PiExtractionCacheKey,
+		record: CaseStudyRecord | undefined,
+	): Promise<void> {
+		if (!this.piExtractionCache) return;
+		try {
+			await this.piExtractionCache.set({
+				version: PI_EXTRACTION_CACHE_VERSION,
+				key: cacheKey.key,
+				url: cacheKey.url,
+				promptHash: cacheKey.promptHash,
+				storedAt: new Date().toISOString(),
+				valid: Boolean(record),
+				record: record ? cloneCaseStudyRecord(record) : undefined,
+			});
+			this.recordTool(
+				"pi_runtime_extract_case_study_cache",
+				url,
+				JSON.stringify(
+					{
+						status: "stored",
+						key: cacheKey.key.slice(0, 16),
+						valid: Boolean(record),
+					},
+					null,
+					2,
+				),
+			);
+		} catch (error) {
+			this.recordTool(
+				"pi_runtime_extract_case_study_cache",
+				url,
+				`cache write failed; extraction result still used. ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+	}
+
+	private recordPiExtractionOutput(
+		url: string,
+		record: CaseStudyRecord | undefined,
+	): void {
+		this.recordTool(
+			"pi_runtime_extract_case_study_output",
+			url,
+			record
+				? JSON.stringify(
+						{
+							company: record.company,
+							headline: record.headline,
+							useCase: record.useCase,
+						},
+						null,
+						2,
+					)
+				: "Pi marked this page as not a valid Temporal case-study record.",
+		);
+	}
+
 	async generateWithLlm(
 		request: HarnessLlmRequest,
-		options: { recordOutput?: boolean } = {},
+		options: { recordOutput?: boolean; recordPrompt?: boolean } = {},
 	): Promise<string> {
 		this.record("act", `llm ${request.purpose}`);
-		this.recordTool("llm_prompt", request.purpose, request.prompt);
+		this.recordTool(
+			"llm_prompt",
+			request.purpose,
+			options.recordPrompt === false
+				? `<prompt omitted from transcript; ${request.prompt.length} characters>`
+				: request.prompt,
+		);
+		const effectiveSkillName =
+			request.skillName === null
+				? undefined
+				: (request.skillName ?? "temporal-codeact-builder");
+		if (effectiveSkillName) {
+			this.recordTool(
+				"pi_agent_skill",
+				request.purpose,
+				`--skill skills/${effectiveSkillName}/SKILL.md`,
+			);
+		}
 		this.record(
 			"observation",
 			`Waiting for Pi/LLM output for ${request.purpose}${
@@ -740,7 +944,7 @@ export class PiTemporalHarness {
 			? await this.researchOptions.llmGenerate(request)
 			: await generateTextWithPi({
 					prompt: request.prompt,
-					skillName: "temporal-codeact-builder",
+					skillName: effectiveSkillName,
 					timeoutMs: request.timeoutMs ?? 180_000,
 				});
 		if (options.recordOutput !== false) {
@@ -767,39 +971,17 @@ export class PiTemporalHarness {
 		result: CaseStudyResearchResult,
 		extraContext = "",
 	): Promise<CaseStudyArtifactBundle> {
-		const response = await this.generateWithLlm({
-			purpose: `${mode}-case-study-artifact-bundle`,
-			prompt: [
-				"You are Pi generating a cited customer-proof marketing page from verified Temporal case-study evidence.",
-				"Return ONLY the three tagged sections below. Do not return JSON; HTML inside JSON is too brittle.",
-				"---HTML---",
-				"<!doctype html>...",
-				"---CITATIONS---",
-				"# ...",
-				"---NARRATIVE---",
-				"# ...",
-				"---END---",
-				"Use only the supplied marketing evidence rows and source URLs. Do not invent missing customers or metrics.",
-				"Do not expose environment variables, API keys, namespaces, or raw commands.",
-				"Include source links in both HTML and citations markdown.",
-				extraContext,
-				"Marketing evidence brief:",
-				buildMarketingEvidenceBrief(result),
-			].join("\n"),
-		});
-		try {
-			return parseArtifactBundleFromLlm(response);
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
+		const purpose = `${mode}-case-study-artifact-bundle`;
+		const fallback = (reason: string): CaseStudyArtifactBundle => {
 			this.record(
 				"observation",
-				`Pi artifact bundle response was invalid; continuing with fallback artifact rendering. ${message}`,
+				`Pi artifact bundle response was unavailable or invalid; continuing with fallback artifact rendering. ${truncateForRepairPrompt(reason, 1000)}`,
 			);
 			this.recordTool(
 				"artifact_bundle_fallback",
-				`${mode}-case-study-artifact-bundle`,
+				purpose,
 				[
-					"Pi returned a malformed HTML/citations/narrative bundle.",
+					"Pi did not return a usable HTML/citations/narrative bundle.",
 					"The harness rendered deterministic fallback artifacts from the extracted research state.",
 					"Source URLs and extracted facts are still preserved; no customer stories are invented.",
 				].join("\n"),
@@ -807,8 +989,38 @@ export class PiTemporalHarness {
 			return {
 				html: renderCaseStudyMarketingPage(mode, result),
 				citationsMarkdown: renderCaseStudySourceCitations(result),
-				narrativeMarkdown: renderFallbackNarrative(mode, result, message),
+				narrativeMarkdown: renderFallbackNarrative(mode, result, reason),
 			};
+		};
+		let response: string;
+		try {
+			response = await this.generateWithLlm({
+				purpose,
+				prompt: [
+					"You are Pi generating a cited customer-proof marketing page from verified Temporal case-study evidence.",
+					"Return ONLY the three tagged sections below. Do not return JSON; HTML inside JSON is too brittle.",
+					"---HTML---",
+					"<!doctype html>...",
+					"---CITATIONS---",
+					"# ...",
+					"---NARRATIVE---",
+					"# ...",
+					"---END---",
+					"Use only the supplied marketing evidence rows and source URLs. Do not invent missing customers or metrics.",
+					"Do not expose environment variables, API keys, namespaces, or raw commands.",
+					"Include source links in both HTML and citations markdown.",
+					extraContext,
+					"Marketing evidence brief:",
+					buildMarketingEvidenceBrief(result),
+				].join("\n"),
+			});
+		} catch (error) {
+			return fallback(error instanceof Error ? error.message : String(error));
+		}
+		try {
+			return parseArtifactBundleFromLlm(response);
+		} catch (error) {
+			return fallback(error instanceof Error ? error.message : String(error));
 		}
 	}
 
@@ -1005,11 +1217,21 @@ export class PiTemporalHarness {
 			return output;
 		}
 
-		if (command === "temporal skill context load") {
-			const output = buildTemporalSkillContextWindow();
+		if (command === "temporal agent skill load") {
+			const output = buildTemporalAgentSkillGenerationSummary();
 			this.recordTool(
-				"temporal_skill_context_loaded",
-				"Temporal Python references -> CodeAct prompt context",
+				"temporal_agent_skill_loaded",
+				"Temporal Agent Skill -> CodeAct scaffold generation",
+				output,
+			);
+			return output;
+		}
+
+		if (command === "temporal scaffold validation-references") {
+			const output = buildTemporalValidationReferenceSummary();
+			this.recordTool(
+				"temporal_validation_references",
+				"Temporal Python references -> generation and validation checks",
 				output,
 			);
 			return output;
@@ -1021,15 +1243,167 @@ export class PiTemporalHarness {
 	private async generateWriteAndValidateTemporalScaffold(
 		scaffoldDir: string,
 	): Promise<ScaffoldAttemptResult> {
+		if (this.shouldStartScaffoldChildWorkflow()) {
+			try {
+				return await this.generateWriteAndValidateTemporalScaffoldAsChildWorkflow(
+					scaffoldDir,
+				);
+			} catch (error) {
+				this.recordTool(
+					"temporal_child_workflow_fallback",
+					"codeact-scaffold-child-workflow",
+					[
+						"Temporal child workflow orchestration failed before returning a scaffold.",
+						redactSecrets(
+							error instanceof Error ? error.message : String(error),
+						),
+						"Falling back to the local harness validate/repair loop.",
+					].join("\n"),
+				);
+			}
+		}
+		return this.generateWriteAndValidateTemporalScaffoldLocally(scaffoldDir);
+	}
+
+	private shouldStartScaffoldChildWorkflow(): boolean {
+		if (this.researchOptions.enableCodeActScaffoldChildWorkflow !== undefined) {
+			return (
+				this.researchOptions.enableCodeActScaffoldChildWorkflow &&
+				!this.researchOptions.llmGenerate
+			);
+		}
+		return shouldRunCodeActScaffoldChildWorkflow(
+			Boolean(this.researchOptions.llmGenerate),
+		);
+	}
+
+	private async generateWriteAndValidateTemporalScaffoldAsChildWorkflow(
+		scaffoldDir: string,
+	): Promise<ScaffoldAttemptResult> {
 		const timeoutMs = Number(
 			process.env.CODEACT_SCAFFOLD_TIMEOUT_MS || 150_000,
 		);
 		const configuredRepairAttempts = Number(
-			process.env.CODEACT_SCAFFOLD_REPAIR_ATTEMPTS || 1,
+			process.env.CODEACT_SCAFFOLD_REPAIR_ATTEMPTS || 3,
 		);
 		const repairAttempts = Number.isFinite(configuredRepairAttempts)
-			? Math.max(0, Math.floor(configuredRepairAttempts))
-			: 1;
+			? Math.max(3, Math.floor(configuredRepairAttempts))
+			: 3;
+		const runId = this.runDir.split("/").pop() || `codeact-${Date.now()}`;
+		this.recordWorker({
+			workerId: "codeact-scaffold-child-workflow",
+			phase: "planned",
+			message:
+				"Temporal parent workflow will run scaffold validation and repair as a child workflow.",
+		});
+		const result = await runCodeActScaffoldChildWorkflow({
+			runId,
+			scaffoldDir,
+			repairAttempts,
+			timeoutMs,
+		});
+		this.recordWorker({
+			workerId: "codeact-scaffold-child-workflow",
+			phase: "complete",
+			message: `Child workflow ${result.childWorkflowId || "unknown"} returned ${
+				result.usedFallback
+					? "the validated fallback scaffold"
+					: `a validated scaffold on attempt ${
+							result.acceptedAttempt ?? "unknown"
+						}`
+			}.`,
+		});
+		this.recordTool(
+			"temporal_child_workflow",
+			result.parentWorkflowId || "codeActScaffoldParentWorkflow",
+			JSON.stringify(
+				{
+					parentWorkflowId: result.parentWorkflowId,
+					childWorkflowId: result.childWorkflowId,
+					attempts: result.attempts,
+					usedFallback: result.usedFallback,
+					acceptedAttempt: result.acceptedAttempt,
+				},
+				null,
+				2,
+			),
+		);
+		for (const attempt of result.attempts) {
+			if (attempt.attempt > 1) {
+				this.recordTool(
+					"scaffold_repair_feedback",
+					attempt.purpose,
+					[
+						"The Temporal child workflow fed the previous generated scaffold failure back to Pi.",
+						attempt.errorMessage || "Previous scaffold attempt failed.",
+						"Pi had to return a complete corrected bash-heredoc scaffold.",
+					].join("\n"),
+				);
+			}
+			if (attempt.status === "rejected") {
+				this.recordTool(
+					"llm_output_rejected",
+					attempt.purpose,
+					[
+						"Rejected Pi scaffold candidate inside the Temporal child workflow.",
+						`Reason: ${attempt.errorMessage || "Unknown validation failure"}`,
+						"Invalid candidate code is intentionally not displayed as generated code because it may contain fabricated placeholder URLs or broken Temporal wiring.",
+					].join("\n"),
+				);
+			}
+		}
+		if (result.usedFallback) {
+			this.recordTool(
+				"scaffold_generation_fallback",
+				"codeact-temporal-bash-scaffold",
+				[
+					"The Temporal child workflow exhausted Pi scaffold repair attempts.",
+					"The workflow continued with the validated Temporal scaffold so the demo does not hang.",
+					"Generated-code lint and py_compile still ran before extraction.",
+				].join("\n"),
+			);
+		} else {
+			this.recordTool(
+				"llm_output_validated",
+				result.attempts.find((attempt) => attempt.status === "validated")
+					?.purpose ?? "codeact-temporal-bash-scaffold",
+				[
+					"Temporal child workflow accepted the scaffold after parsing, py_compile, generated-code lint, and Temporal primitive validation.",
+					"",
+					result.acceptedOutput ?? "(accepted scaffold output omitted)",
+				].join("\n"),
+			);
+			if ((result.acceptedAttempt ?? 1) > 1) {
+				this.recordTool(
+					"scaffold_repair_success",
+					`codeact-temporal-bash-scaffold-repair-${(result.acceptedAttempt ?? 1) - 1}`,
+					[
+						`Temporal child workflow repair attempt ${(result.acceptedAttempt ?? 1) - 1} produced a valid scaffold.`,
+						...result.validation,
+					].join("\n"),
+				);
+			}
+		}
+		return {
+			spec: result.spec,
+			generated: result.generated,
+			validation: result.validation,
+			usedFallback: result.usedFallback,
+		};
+	}
+
+	private async generateWriteAndValidateTemporalScaffoldLocally(
+		scaffoldDir: string,
+	): Promise<ScaffoldAttemptResult> {
+		const timeoutMs = Number(
+			process.env.CODEACT_SCAFFOLD_TIMEOUT_MS || 150_000,
+		);
+		const configuredRepairAttempts = Number(
+			process.env.CODEACT_SCAFFOLD_REPAIR_ATTEMPTS || 3,
+		);
+		const repairAttempts = Number.isFinite(configuredRepairAttempts)
+			? Math.max(3, Math.floor(configuredRepairAttempts))
+			: 3;
 		const maxAttempts = 1 + repairAttempts;
 		const basePrompt = buildTemporalScaffoldLlmPrompt();
 		let prompt = basePrompt;
@@ -1063,6 +1437,7 @@ export class PiTemporalHarness {
 					{
 						purpose,
 						prompt,
+						skillName: temporalDeveloperSkillName,
 						timeoutMs,
 					},
 					{ recordOutput: false },
@@ -1194,6 +1569,160 @@ export class PiTemporalHarness {
 	}
 }
 
+const PI_EXTRACTION_CACHE_VERSION = "pi-case-study-extraction-v1";
+const PI_EXTRACTION_CACHE_FILE_VERSION = 1;
+
+type PiExtractionCacheOptions = Pick<
+	HarnessDemoOptions,
+	"llmGenerate" | "enablePiExtractionCache" | "piExtractionCachePath"
+>;
+
+class PiExtractionCacheStore {
+	private readonly loadPromise: Promise<Map<string, PiExtractionCacheEntry>>;
+	private writeQueue: Promise<void> = Promise.resolve();
+
+	constructor(private readonly path: string) {
+		this.loadPromise = this.load();
+	}
+
+	async get(key: string): Promise<PiExtractionCacheEntry | undefined> {
+		const entries = await this.loadPromise;
+		const entry = entries.get(key);
+		if (!entry || entry.version !== PI_EXTRACTION_CACHE_VERSION)
+			return undefined;
+		if (entry.valid && !isCaseStudyRecord(entry.record)) return undefined;
+		return clonePiExtractionCacheEntry(entry);
+	}
+
+	async set(entry: PiExtractionCacheEntry): Promise<void> {
+		const entries = await this.loadPromise;
+		entries.set(entry.key, clonePiExtractionCacheEntry(entry));
+		const snapshot = [...entries.values()].map(clonePiExtractionCacheEntry);
+		this.writeQueue = this.writeQueue.then(async () => {
+			await mkdir(dirname(this.path), { recursive: true });
+			const file: PiExtractionCacheFile = {
+				version: PI_EXTRACTION_CACHE_FILE_VERSION,
+				entries: Object.fromEntries(snapshot.map((item) => [item.key, item])),
+			};
+			await writeFile(this.path, `${JSON.stringify(file, null, 2)}\n`, "utf8");
+		});
+		return this.writeQueue;
+	}
+
+	private async load(): Promise<Map<string, PiExtractionCacheEntry>> {
+		let raw: string;
+		try {
+			raw = await readFile(this.path, "utf8");
+		} catch (error) {
+			if (isNodeErrorWithCode(error, "ENOENT")) return new Map();
+			throw error;
+		}
+		const parsed = JSON.parse(raw) as Partial<PiExtractionCacheFile>;
+		const entries = new Map<string, PiExtractionCacheEntry>();
+		if (parsed.version !== PI_EXTRACTION_CACHE_FILE_VERSION) return entries;
+		if (!parsed.entries || typeof parsed.entries !== "object") return entries;
+		for (const [key, value] of Object.entries(parsed.entries)) {
+			if (!isPiExtractionCacheEntry(value)) continue;
+			entries.set(key, clonePiExtractionCacheEntry(value));
+		}
+		return entries;
+	}
+}
+
+function createPiExtractionCacheStore(
+	options: PiExtractionCacheOptions,
+): PiExtractionCacheStore | undefined {
+	if (!shouldUsePiExtractionCache(options)) return undefined;
+	return new PiExtractionCacheStore(
+		options.piExtractionCachePath ??
+			process.env.PI_EXTRACTION_CACHE_PATH ??
+			join(artifactsDir, "cache", "pi-case-study-extractions.json"),
+	);
+}
+
+function shouldUsePiExtractionCache(
+	options: PiExtractionCacheOptions,
+): boolean {
+	if (options.enablePiExtractionCache !== undefined) {
+		return options.enablePiExtractionCache;
+	}
+	if (process.env.PI_EXTRACTION_CACHE !== undefined) {
+		return !/^(0|false|off|no)$/i.test(process.env.PI_EXTRACTION_CACHE.trim());
+	}
+	if (process.env.PI_EXTRACTION_CACHE_PATH) return true;
+	return !options.llmGenerate;
+}
+
+function buildPiExtractionCacheKey(
+	url: string,
+	prompt: string,
+): PiExtractionCacheKey {
+	const normalizedUrl = normalizeCaseStudyUrl(url);
+	const promptHash = hashText(`${PI_EXTRACTION_CACHE_VERSION}\n${prompt}`);
+	const key = hashText(
+		`${PI_EXTRACTION_CACHE_VERSION}\n${normalizedUrl}\n${promptHash}`,
+	);
+	return { key, promptHash, url: normalizedUrl };
+}
+
+function hashText(value: string): string {
+	return createHash("sha256").update(value).digest("hex");
+}
+
+function isPiExtractionCacheEntry(
+	value: unknown,
+): value is PiExtractionCacheEntry {
+	if (!value || typeof value !== "object") return false;
+	const entry = value as Partial<PiExtractionCacheEntry>;
+	if (
+		entry.version !== PI_EXTRACTION_CACHE_VERSION ||
+		typeof entry.key !== "string" ||
+		typeof entry.url !== "string" ||
+		typeof entry.promptHash !== "string" ||
+		typeof entry.storedAt !== "string" ||
+		typeof entry.valid !== "boolean"
+	) {
+		return false;
+	}
+	return !entry.valid || isCaseStudyRecord(entry.record);
+}
+
+function isCaseStudyRecord(value: unknown): value is CaseStudyRecord {
+	if (!value || typeof value !== "object") return false;
+	const record = value as Partial<CaseStudyRecord>;
+	return (
+		typeof record.url === "string" &&
+		typeof record.slug === "string" &&
+		typeof record.company === "string" &&
+		typeof record.headline === "string" &&
+		typeof record.summary === "string" &&
+		typeof record.evidenceQuote === "string" &&
+		typeof record.temporalValue === "string" &&
+		record.sourceType === "Temporal case study"
+	);
+}
+
+function clonePiExtractionCacheEntry(
+	entry: PiExtractionCacheEntry,
+): PiExtractionCacheEntry {
+	return {
+		...entry,
+		record: entry.record ? cloneCaseStudyRecord(entry.record) : undefined,
+	};
+}
+
+function cloneCaseStudyRecord(record: CaseStudyRecord): CaseStudyRecord {
+	return { ...record };
+}
+
+function isNodeErrorWithCode(error: unknown, code: string): boolean {
+	return (
+		error instanceof Error &&
+		"code" in error &&
+		(error as NodeJS.ErrnoException).code === code
+	);
+}
+
 function buildMarketingEvidenceBrief(result: CaseStudyResearchResult): string {
 	const proofRows = result.records
 		.map((record, index) =>
@@ -1242,10 +1771,12 @@ function uniqueUrls(urls: string[]): string[] {
 	return [...new Set(urls.map((url) => url.replace(/\/$/, "")))];
 }
 
-function buildTemporalScaffoldLlmPrompt(): string {
+export function buildTemporalScaffoldLlmPrompt(): string {
 	const scaffold = createTemporalScaffoldSpec();
 	return [
 		"You are Pi running CodeAct for a developer demo.",
+		`Use the loaded ${temporalDeveloperSkillName} Temporal Agent Skill for Temporal Python SDK structure, determinism, activities, workers, clients, signals, queries, retries, and durable AI-agent patterns.`,
+		"The prompt below supplies the demo-specific output contract and validation requirements.",
 		"Generate a bash script that writes a Python Temporal scaffold for Temporal customer case-study research.",
 		"Return ONLY bash text. Do not return JSON. Do not wrap the answer in Markdown fences.",
 		"Use single-quoted heredocs so Python code is written exactly as text.",
@@ -1263,8 +1794,6 @@ function buildTemporalScaffoldLlmPrompt(): string {
 		"...write every required file listed below...",
 		"python3 -m py_compile src/*.py",
 		"",
-		buildTemporalSkillContextWindow(),
-		"",
 		"Required files:",
 		...scaffold.files.map((file) => `- ${file.path}: ${file.purpose}`),
 		"Required Temporal primitives and code signals:",
@@ -1272,7 +1801,7 @@ function buildTemporalScaffoldLlmPrompt(): string {
 			(primitive) => `- ${primitive.label}: ${primitive.codeSignal}`,
 		),
 		"Strict validation contract:",
-		"- requirements.txt must include every third-party package imported by generated Python, such as requests, beautifulsoup4, or lxml. Prefer stdlib urllib.request and html.parser/re when possible.",
+		"- requirements.txt must include every third-party package imported by generated Python, such as requests, beautifulsoup4, or lxml. Prefer stdlib urllib.request for fetching. Do not use regex or HTML heuristics as the semantic case-study extractor.",
 		"- Do not rename TemporalCaseStudyResearchWorkflow.",
 		"- src/models.py must define CaseStudyRecord fields url, company, headline, summary, evidence_quote, and temporal_value.",
 		"- src/models.py must define workflow state with records, attempted_urls, discovered_urls, and failed_pages.",
@@ -1283,14 +1812,31 @@ function buildTemporalScaffoldLlmPrompt(): string {
 		"- src/workflows.py must contain asyncio.gather(*tasks, return_exceptions=True).",
 		"- src/workflows.py must accept page_budget and use it to bound discovered URLs before extraction.",
 		"- src/workflows.py must pass page_budget, not batch_size, to discover_case_study_urls so discovery can find enough URLs for 20 records.",
-		"- src/workflows.py must map parallel results with zip(batch, results); do not index discovered_urls using len(attempted_urls) + i while mutating attempted_urls.",
+		"- src/workflows.py must map parallel results with zip(batch, results); do not look URLs back up with len(attempted_urls) + i while mutating attempted_urls.",
 		"- src/workflows.py must not require isinstance(result, CaseStudyRecord) before appending activity output; Temporal payload conversion may return dict-shaped records, so append valid non-exception results or normalize dicts before appending.",
+		"- src/workflows.py must not call workflow.info().workflow_execution_timeout; the Python SDK Info object does not expose that attribute. Use explicit timedelta(seconds=...) activity start_to_close_timeout values.",
 		"- src/activities.py must contain @activity.defn def fetch_and_extract_case_study and ApplicationError.",
+		"- src/activities.py activity functions must be synchronous def functions, not async def, because they use blocking urllib and subprocess.run and must execute on the worker ThreadPoolExecutor.",
 		"- src/activities.py must crawl live Temporal-owned sources: https://temporal.io/in-use and https://temporal.io/sitemap.xml.",
 		"- src/activities.py must only count URLs under /resources/case-studies/ as valid case studies.",
-		"- src/activities.py must return CaseStudyRecord values with company, headline, summary, evidence_quote, and temporal_value populated from page text.",
+		'- src/activities.py must discover case-study URLs with a bounded slug regex such as CASE_STUDY_PATTERN = re.compile(r"https://temporal\\.io/resources/case-studies/[a-z0-9\\-/]+", re.I); do not use broad [^\\s"<>]+ URL matching that captures trailing punctuation.',
+		"- src/activities.py must catch urllib.error.HTTPError separately and treat err.code == 404 as a non-retryable missing case-study page.",
+		"- src/activities.py must call the Pi runtime from the fetch/extract Activity to extract company, headline, summary, evidence_quote, and temporal_value from page text.",
+		'- src/activities.py must read the Pi command with: command = shlex.split(os.getenv("PI_COMMAND", "pi")).',
+		'- src/activities.py must invoke Pi with subprocess.run([*command, "--mode", "json", "--no-session", "--no-tools", "-p", prompt], text=True, capture_output=True, timeout=180, check=False).',
+		"- src/activities.py must parse Pi --mode json stdout as newline-delimited JSON events: iterate completed.stdout.splitlines(), json.loads each line, read assistant text from message_end.message.content or from the last assistant message in agent_end.messages, then parse structured extraction fields from that assistant text.",
+		"- src/activities.py should prefer JSON when present, but it must not require the whole assistant answer to be exactly JSON. It should extract the first balanced JSON object or fall back to labeled fields such as Company:, Headline:, Summary:, Evidence quote:, and Temporal value:.",
+		"- src/activities.py must cache parsed Pi extraction payloads when PI_EXTRACTION_CACHE_PATH is set: hash the extraction prompt, call read_extraction_cache(cache_key) before subprocess.run, and call write_extraction_cache(cache_key, parsed) after successful parsing.",
+		"- src/activities.py must not call json.loads(completed.stdout), json.loads(completed.stdout.strip()), or json.loads(output) where output came from completed.stdout; Pi JSON-mode stdout is an event stream, not one JSON document.",
+		'- src/activities.py must treat unparseable Pi extraction responses and missing required extraction fields as non-retryable ApplicationError failures, for example ApplicationError("Pi extraction response could not be parsed into fields", type="ValidationError", non_retryable=True).',
+		"- src/activities.py export_marketing_html must handle dict-shaped record payloads as well as CaseStudyRecord objects before reading fields, because Temporal may decode records nested inside a list as dictionaries.",
+		'- Do not hardcode ["pi", "ask", prompt] or any other fixed Pi command; use the PI_COMMAND environment variable with the "pi" fallback above.',
+		"- Regex is acceptable for URL discovery and JSON response boundary parsing only; semantic case-study record extraction must be delegated to Pi runtime.",
 		"- src/activities.py must not fabricate example URLs, fake companies, fixture records, or preloaded case-study data.",
+		'- src/workflows.py must not stringify activity exception objects in workflow logs or state updates with patterns such as f"...{result}"; log only the URL or a short static failure reason before storing bounded failure metadata.',
 		"- src/worker.py must contain Worker(client, task_queue=TASK_QUEUE and the literal activity_executor.",
+		'- src/worker.py and src/client.py must set TASK_QUEUE from required_env("TEMPORAL_TASK_QUEUE"); do not hardcode or default to any fixed task queue.',
+		"- src/workflows.py must not hardcode a task_queue for execute_activity calls; omit task_queue so activities run on the current workflow task queue.",
 		"- src/worker.py must connect with TEMPORAL_ADDRESS, TEMPORAL_NAMESPACE, TEMPORAL_API_KEY, and tls=True when an API key is present.",
 		"- src/client.py must read CODEACT_WORKFLOW_ID, CODEACT_TARGET_COUNT, CODEACT_BATCH_SIZE, and CODEACT_PAGE_BUDGET.",
 		"- src/client.py must connect with TEMPORAL_ADDRESS, TEMPORAL_NAMESPACE, TEMPORAL_API_KEY, and tls=True when an API key is present.",
@@ -1298,24 +1844,55 @@ function buildTemporalScaffoldLlmPrompt(): string {
 		"- src/worker.py must pass the API key with Client.connect(..., api_key=api_key, tls=True if api_key else False); do not use rpc_metadata for authentication.",
 		"- src/client.py must print JSON lines prefixed with CODEACT_TEMPORAL_EVENT so the UI can show the generated workflow ID, activity names, and final state.",
 		"- src/client.py must import asdict and is_dataclass from dataclasses, define to_jsonable(...), and pass every event payload through to_jsonable before json.dumps.",
+		"- src/client.py must wrap handle.query(TemporalCaseStudyResearchWorkflow.current_state) in try/except, emit workflow_query_failed with the exception type if the query times out, and continue to signal approve_export and await handle.result().",
 		"- The workflow_completed event must include state=result so the TypeScript harness can build the marketing artifact from the generated workflow output.",
-		"- The workflow_completed event must be JSON serializable even when result is a dataclass such as WorkflowState.",
+		'- src/client.py must normalize the workflow result before computing counts: result = await handle.result(); result_state = to_jsonable(result); then emit("workflow_completed", workflow_id=workflow_id, state=result, records=state_list_count(result_state, "records"), failures=state_list_count(result_state, "failed_pages"), attempted=state_list_count(result_state, "attempted_urls")).',
+		"- src/client.py must define state_list_count(state, key) so workflow result counts work whether Temporal decodes WorkflowState as a dataclass-like object or as a dict.",
+		"- The workflow_completed event must be JSON serializable even when result is a dataclass such as WorkflowState or a dict decoded by Temporal Cloud.",
 		"- Do not use TEMPORAL_HOST; this demo's Cloud contract is TEMPORAL_ADDRESS.",
 		"- src/extractor.py must import ThreadPoolExecutor and define bounded_parallel_extract.",
 		"Required worker.py shape:",
 		"from concurrent.futures import ThreadPoolExecutor",
+		"def required_env(name: str) -> str:",
+		'TASK_QUEUE = required_env("TEMPORAL_TASK_QUEUE")',
 		"activity_executor = ThreadPoolExecutor(max_workers=8)",
 		"worker = Worker(client, task_queue=TASK_QUEUE, workflows=[TemporalCaseStudyResearchWorkflow], activities=[discover_case_study_urls, fetch_and_extract_case_study, export_marketing_html], activity_executor=activity_executor)",
 		"Required extractor.py shape:",
 		"from concurrent.futures import ThreadPoolExecutor",
 		"def bounded_parallel_extract(urls: list[str], limit: int = 8) -> dict:",
+		"Required activities.py Pi runtime invocation shape:",
+		"import os",
+		"import shlex",
+		"import subprocess",
+		'command = shlex.split(os.getenv("PI_COMMAND", "pi"))',
+		'completed = subprocess.run([*command, "--mode", "json", "--no-session", "--no-tools", "-p", prompt], text=True, capture_output=True, timeout=180, check=False)',
+		"assistant_text = extract_assistant_text(completed.stdout)",
+		"parsed = parse_extraction_response(assistant_text or completed.stdout)",
+		"def extract_assistant_text(stdout: str) -> str:",
+		'last_assistant = ""',
+		"for line in stdout.splitlines():",
+		'messages = event.get("messages") or []',
+		'last_assistant = text_from_content(message.get("content"))',
+		"def text_from_content(content: object) -> str:",
+		"def parse_extraction_response(text: str) -> dict[str, object]:",
+		"def parse_json_object(text: str) -> object:",
+		"def parse_labeled_fields(text: str) -> dict[str, object]:",
+		'PI_EXTRACTION_CACHE_PATH = os.getenv("PI_EXTRACTION_CACHE_PATH")',
+		"def read_extraction_cache(cache_key: str) ->",
+		"def write_extraction_cache(cache_key: str, payload: dict[str, object]) -> None:",
 		"Required client.py runtime behavior:",
+		'TASK_QUEUE = required_env("TEMPORAL_TASK_QUEUE")',
 		'workflow_id = os.getenv("CODEACT_WORKFLOW_ID") or f"temporal-case-study-research-{uuid.uuid4()}"',
 		"handle = await client.start_workflow(TemporalCaseStudyResearchWorkflow.run, args=[target_count, batch_size, page_budget], id=workflow_id, task_queue=TASK_QUEUE)",
+		"try:",
 		"state = await handle.query(TemporalCaseStudyResearchWorkflow.current_state)",
+		'emit("workflow_query_failed", workflow_id=workflow_id, error=type(err).__name__)',
 		'await handle.signal(TemporalCaseStudyResearchWorkflow.approve_export, "approved from generated client")',
+		"result = await handle.result()",
+		"result_state = to_jsonable(result)",
+		"def state_list_count(state: object, key: str) -> int:",
 		'print("CODEACT_TEMPORAL_EVENT " + json.dumps({"event": event, **to_jsonable(payload)}), flush=True)',
-		'emit("workflow_completed", workflow_id=workflow_id, state=result, records=len(result.records), failures=len(result.failed_pages), attempted=len(result.attempted_urls))',
+		'emit("workflow_completed", workflow_id=workflow_id, state=result, records=state_list_count(result_state, "records"), failures=state_list_count(result_state, "failed_pages"), attempted=state_list_count(result_state, "attempted_urls"))',
 		"Implementation requirements:",
 		"- Workflow code must be deterministic: no network, filesystem, or subprocess calls inside workflow methods.",
 		"- Put live crawling/fetching/extraction/export in Activities.",
@@ -1329,7 +1906,7 @@ function buildTemporalScaffoldLlmPrompt(): string {
 	].join("\n");
 }
 
-function buildTemporalScaffoldRepairPrompt(
+export function buildTemporalScaffoldRepairPrompt(
 	basePrompt: string,
 	error: string,
 	previousOutput: string,
@@ -1346,17 +1923,29 @@ function buildTemporalScaffoldRepairPrompt(
 		"If the failure mentions workflow.unsafe.imports_passed_through or workflow sandbox, import models and activities inside with workflow.unsafe.imports_passed_through(): in src/workflows.py.",
 		"If the failure mentions requirements.txt, add every third-party package imported by generated code, for example requests, beautifulsoup4, or lxml.",
 		"If the failure mentions src/worker.py, include activity_executor and Worker(client, task_queue=TASK_QUEUE in src/worker.py.",
+		'If the failure mentions TEMPORAL_TASK_QUEUE, hardcoding, or a stale task queue literal, update both src/worker.py and src/client.py to set TASK_QUEUE = required_env("TEMPORAL_TASK_QUEUE") and use TASK_QUEUE everywhere. Do not hardcode or default to any fixed task queue.',
 		"If the failure mentions TEMPORAL_HOST, replace it with TEMPORAL_ADDRESS and include TEMPORAL_API_KEY plus tls=True when present.",
 		"If the failure mentions rpc_metadata or Jwt is missing, pass api_key=api_key into Client.connect and do not use rpc_metadata for Temporal Cloud auth.",
 		"If the failure mentions src/client.py, include CODEACT_WORKFLOW_ID, current_state, approve_export, and CODEACT_TEMPORAL_EVENT JSON-line output.",
-		"If the failure mentions state=result, make the final CODEACT_TEMPORAL_EVENT workflow_completed payload include state=result.",
-		"If the failure mentions to_jsonable, JSON serializable, WorkflowState, asdict, or is_dataclass, convert dataclasses with asdict/is_dataclass before calling json.dumps.",
+		'If the failure mentions state=result, result.records, AttributeError, dict object has no attribute, or workflow_completed, make src/client.py use result = await handle.result(), result_state = to_jsonable(result), and then emit("workflow_completed", workflow_id=workflow_id, state=result, records=state_list_count(result_state, "records"), failures=state_list_count(result_state, "failed_pages"), attempted=state_list_count(result_state, "attempted_urls")).',
+		"If the failure mentions to_jsonable, JSON serializable, WorkflowState, asdict, is_dataclass, or state_list_count, convert dataclasses with asdict/is_dataclass before calling json.dumps and count records from the normalized result_state dict/list shape.",
 		"If the failure mentions page_budget, update src/workflows.py so run accepts page_budget and slices discovered URLs before extraction.",
 		"If the failure says pass page_budget, not batch_size, call discover_case_study_urls with page_budget from the workflow run arguments.",
-		"If the failure mentions zip(batch, results), discovered_urls[len(...)] indexing, or len(attempted_urls) + i, rewrite result handling to iterate for url, result in zip(batch, results) before mutating attempted_urls.",
+		"If the failure mentions zip(batch, results), len(attempted_urls) + i, or indexing discovered URLs while mutating attempted_urls, rewrite result handling to iterate for url, result in zip(batch, results) before mutating attempted_urls.",
 		"If the failure mentions isinstance(result, CaseStudyRecord), rewrite src/workflows.py so non-exception activity results are appended or normalized from dicts; do not drop records just because Temporal decoded them as dictionaries.",
+		"If the failure mentions workflow_execution_timeout, rewrite src/workflows.py to remove workflow.info().workflow_execution_timeout and use explicit timedelta(seconds=...) values for each activity start_to_close_timeout.",
+		"If the failure mentions activity exception objects, stringify, workflow logs, or {result}, update src/workflows.py so workflow.logger calls do not interpolate activity exception objects; log only the URL or a short static reason and keep workflow tasks quick.",
+		"If the failure mentions async def, synchronous def, activity_executor, blocking urllib, subprocess.run, or worker event loop, rewrite src/activities.py so every @activity.defn function is a synchronous def function, not async def.",
 		"If the failure mentions live Temporal case-study pages or examples, replace fake example URLs with live crawling of https://temporal.io/in-use and https://temporal.io/sitemap.xml, and accept only /resources/case-studies/ URLs.",
+		'If the failure mentions case-study URL regex, broad URL matching, captured punctuation, [^\\s, CASE_STUDY_PATTERN, or [a-z0-9\\-/]+, update src/activities.py discovery to use a bounded Temporal case-study regex like CASE_STUDY_PATTERN = re.compile(r"https://temporal\\\\.io/resources/case-studies/[a-z0-9\\\\-/]+", re.I), normalize matched URLs, and reject punctuation outside the slug.',
+		"If the failure mentions HTTPError, err.code == 404, 404, or non-retryable missing case-study page, update src/activities.py so fetch_and_extract_case_study catches urllib.error.HTTPError as err and raises ApplicationError for err.code == 404 with non_retryable=True.",
 		"If the failure mentions evidence_quote or temporal_value, update src/activities.py so fetch_and_extract_case_study returns those fields from extracted page text.",
+		'If the failure mentions PI_COMMAND, update src/activities.py so it imports os, shlex, and subprocess; reads command = shlex.split(os.getenv("PI_COMMAND", "pi")); and calls subprocess.run([*command, "--mode", "json", "--no-session", "--no-tools", "-p", prompt], text=True, capture_output=True, timeout=180, check=False). Do not use ["pi", "ask", prompt].',
+		"If the failure mentions PI_EXTRACTION_CACHE_PATH, read_extraction_cache, write_extraction_cache, extraction cache, or cache_key, update src/activities.py so run_pi_extraction hashes the extraction prompt, reads a parsed payload from PI_EXTRACTION_CACHE_PATH before subprocess.run, and writes the parsed payload back after successful parsing.",
+		'If the failure mentions JSONDecodeError, Extra data, parse Pi output, completed.stdout, json.loads(output), json.loads(completed.stdout), extract_assistant_text, text_from_content, agent_end, event.get("messages"), parse_json_object, parse_labeled_fields, or parse_extraction_response, update src/activities.py so it treats Pi --mode json stdout as newline-delimited JSON events: define extract_assistant_text(stdout: str) to keep last_assistant, iterate stdout.splitlines(), json.loads each event line, read message_end.message.content for assistant messages, read the last assistant message from agent_end messages = event.get("messages") or [], extract text through text_from_content(message.get("content")), then call parse_extraction_response(assistant_text or completed.stdout). parse_extraction_response should first parse the first balanced JSON object if present, then fall back to labeled fields like Company:, Headline:, Summary:, Evidence quote:, and Temporal value:. Do not json.loads the entire completed.stdout or an output variable assigned from it, do not require the whole assistant answer to be exactly JSON, and do not read agent_end text from top-level event.get("content").',
+		'If the failure mentions invalid Pi JSON, unparseable response, non_retryable=True, or extraction responses, update src/activities.py so invalid JSON, missing parseable fields, and missing required extraction fields raise ApplicationError with type="ValidationError" and non_retryable=True.',
+		"If the failure mentions export_marketing_html, dict-shaped CaseStudyRecord payloads, list items as dictionaries, record.headline, or AttributeError: 'dict' object has no attribute, update src/activities.py so export_marketing_html normalizes each record from dict to CaseStudyRecord or reads fields through a helper before accessing record fields.",
+		"If the failure mentions workflow_query_failed, handle.query, current_state query, or Timeout expired, update src/client.py so the current_state query is wrapped in try/except, emits workflow_query_failed with error=type(err).__name__ on failure, and still sends approve_export and awaits handle.result().",
 		"If the failure mentions src/extractor.py, import ThreadPoolExecutor and define bounded_parallel_extract in src/extractor.py.",
 		"",
 		"Validation or parser failure to fix:",
@@ -1436,6 +2025,199 @@ function buildPiLiveTemporalSearchPrompt(): string {
 		"Do not include raw environment variables, API keys, Temporal namespace, PI_COMMAND, or secrets.",
 		"Do not invent URLs. If the live fetch fails, return JSON with discoveredUrls as an empty array and observations explaining the failure.",
 	].join("\n");
+}
+
+const PI_EXTRACTION_HTML_LIMIT = 45_000;
+
+function buildPiCaseStudyExtractionPrompt(url: string, html: string): string {
+	const page = truncateForPiExtraction(html);
+	return [
+		"You are Pi extracting one structured customer-proof record from a Temporal-owned case-study page.",
+		"Use semantic reading of the supplied page content. Do not rely on local regex rules, saved artifacts, repo fixtures, or memory.",
+		"Use only facts present in the supplied page content. Do not invent customers, metrics, quotes, use cases, or claims.",
+		'If the page is not a valid Temporal customer case study or there is not enough evidence, return {"valid":false,"reason":"short reason"} or a short labeled invalid response.',
+		"Prefer one JSON object with this shape when valid:",
+		'{"valid":true,"url":"https://temporal.io/resources/case-studies/...","company":"...","headline":"...","summary":"...","evidenceQuote":"...","temporalValue":"...","industry":"...","useCase":"...","companySize":"...","sdk":"...","deployment":"..."}',
+		"JSON does not have to be the only text in the response; the harness can extract the first balanced JSON object.",
+		"If JSON is inconvenient, return labeled fields instead: Company:, Headline:, Summary:, Evidence quote:, Temporal value:, Industry:, Use case:, Company size:, SDK:, Deployment:.",
+		"Required valid fields are company, headline, summary, evidenceQuote, and temporalValue.",
+		"Optional fields may be omitted or null when the page does not state them.",
+		"Do not expose environment variables, API keys, Temporal namespace, PI_COMMAND, or secrets.",
+		`Source URL: ${url}`,
+		`Supplied page HTML (${html.length} characters, ${page.length} included):`,
+		page,
+	].join("\n\n");
+}
+
+function truncateForPiExtraction(html: string): string {
+	if (html.length <= PI_EXTRACTION_HTML_LIMIT) return html;
+	const headLength = Math.floor(PI_EXTRACTION_HTML_LIMIT * 0.72);
+	const tailLength = PI_EXTRACTION_HTML_LIMIT - headLength;
+	return [
+		html.slice(0, headLength),
+		`<!-- omitted ${html.length - PI_EXTRACTION_HTML_LIMIT} middle characters -->`,
+		html.slice(-tailLength),
+	].join("\n");
+}
+
+function parsePiCaseStudyExtraction(
+	markdown: string,
+	expectedUrl: string,
+): CaseStudyRecord | undefined {
+	const parsed = parseExtractionFieldsFromLlm(markdown);
+	if (parsed.valid === false) return undefined;
+	if (
+		typeof parsed.valid === "string" &&
+		/^(false|no|invalid)$/i.test(parsed.valid.trim())
+	) {
+		return undefined;
+	}
+	const returnedUrl = stringField(parsed, "url") ?? expectedUrl;
+	const normalizedExpectedUrl = normalizeCaseStudyUrl(expectedUrl);
+	const normalizedReturnedUrl = isTemporalCaseStudyUrl(returnedUrl)
+		? normalizeCaseStudyUrl(returnedUrl)
+		: normalizedExpectedUrl;
+	const url =
+		normalizedReturnedUrl === normalizedExpectedUrl
+			? normalizedReturnedUrl
+			: normalizedExpectedUrl;
+	const company = stringField(parsed, "company");
+	const headline = stringField(parsed, "headline");
+	const summary = stringField(parsed, "summary");
+	const evidenceQuote = stringField(parsed, "evidenceQuote", "evidence_quote");
+	const temporalValue = stringField(parsed, "temporalValue", "temporal_value");
+	if (!company || !headline || !summary || !evidenceQuote || !temporalValue) {
+		const missing = [
+			["company", company],
+			["headline", headline],
+			["summary", summary],
+			["evidenceQuote", evidenceQuote],
+			["temporalValue", temporalValue],
+		]
+			.filter(([, value]) => !value)
+			.map(([field]) => field);
+		throw new Error(
+			`Pi extraction response missing required field(s): ${missing.join(", ")}`,
+		);
+	}
+	return {
+		url,
+		slug: slugFromCaseStudyUrl(url),
+		company,
+		headline,
+		summary,
+		evidenceQuote,
+		temporalValue,
+		industry: stringField(parsed, "industry"),
+		useCase: stringField(parsed, "useCase", "use_case"),
+		companySize: stringField(parsed, "companySize", "company_size"),
+		sdk: stringField(parsed, "sdk", "SDK"),
+		deployment: stringField(parsed, "deployment"),
+		sourceType: "Temporal case study",
+	};
+}
+
+function stringField(
+	source: Record<string, unknown>,
+	...keys: string[]
+): string | undefined {
+	for (const key of keys) {
+		const value = source[key];
+		if (typeof value !== "string") continue;
+		const trimmed = value.replace(/\s+/g, " ").trim();
+		if (trimmed && !/^n\/?a$/i.test(trimmed) && !/^unknown$/i.test(trimmed)) {
+			return trimmed;
+		}
+	}
+	return undefined;
+}
+
+function parseExtractionFieldsFromLlm(
+	markdown: string,
+): Record<string, unknown> {
+	try {
+		return parseJsonFromLlm(markdown) as Record<string, unknown>;
+	} catch (error) {
+		const labeled = parseLabeledExtractionFields(markdown);
+		if (labeled) return labeled;
+		throw error;
+	}
+}
+
+const labeledExtractionAliases: Record<string, string> = {
+	valid: "valid",
+	sourceurl: "url",
+	url: "url",
+	company: "company",
+	customer: "company",
+	headline: "headline",
+	title: "headline",
+	summary: "summary",
+	evidencequote: "evidenceQuote",
+	quote: "evidenceQuote",
+	temporalvalue: "temporalValue",
+	value: "temporalValue",
+	industry: "industry",
+	usecase: "useCase",
+	companysize: "companySize",
+	size: "companySize",
+	sdk: "sdk",
+	deployment: "deployment",
+};
+
+function parseLabeledExtractionFields(
+	markdown: string,
+): Record<string, unknown> | undefined {
+	const fields: Record<string, string> = {};
+	let currentKey: string | undefined;
+	for (const rawLine of markdown.split(/\r?\n/)) {
+		const line = rawLine.trim();
+		if (!line) continue;
+		const match =
+			/^(?:[-*]\s*)?(?:\*\*)?([A-Za-z][A-Za-z _/-]{1,40})(?:\*\*)?\s*:\s*(.*)$/.exec(
+				line,
+			);
+		if (match) {
+			const key = labeledExtractionAliases[normalizeLabel(match[1])];
+			if (key) {
+				fields[key] = cleanLabeledFieldValue(match[2]);
+				currentKey = key;
+				continue;
+			}
+		}
+		if (currentKey) {
+			fields[currentKey] = [fields[currentKey], line]
+				.filter(Boolean)
+				.join(" ")
+				.trim();
+		}
+	}
+	if (Object.keys(fields).length === 0) return undefined;
+	return fields;
+}
+
+function normalizeLabel(label: string): string {
+	return label.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function cleanLabeledFieldValue(value: string): string {
+	return value
+		.trim()
+		.replace(/^["']|["']$/g, "")
+		.replace(/\s+/g, " ");
+}
+
+function normalizeCaseStudyUrl(value: string): string {
+	const url = new URL(value);
+	url.hash = "";
+	url.search = "";
+	url.pathname = url.pathname.replace(/\/+$/, "");
+	return url.toString();
+}
+
+function slugFromCaseStudyUrl(value: string): string {
+	const pathname = new URL(normalizeCaseStudyUrl(value)).pathname;
+	return pathname.split("/").filter(Boolean).at(-1) ?? "case-study";
 }
 
 function parsePiLiveSearchResult(markdown: string): PiLiveSearchResult {
@@ -1635,9 +2417,42 @@ function extractHtmlDocument(markdown: string): string {
 function parseJsonFromLlm(markdown: string): unknown {
 	const fenced = /```json\s*([\s\S]*?)```/i.exec(markdown)?.[1];
 	const raw = (fenced ?? markdown).trim();
-	const start = raw.indexOf("{");
-	const end = raw.lastIndexOf("}");
-	if (start < 0 || end < start)
+	const object = extractFirstBalancedJsonObject(raw);
+	if (!object) {
 		throw new Error("LLM response did not contain a JSON object.");
-	return JSON.parse(raw.slice(start, end + 1));
+	}
+	return JSON.parse(object);
+}
+
+function extractFirstBalancedJsonObject(raw: string): string | undefined {
+	const start = raw.indexOf("{");
+	if (start < 0) return undefined;
+	let depth = 0;
+	let inString = false;
+	let escaped = false;
+	for (let index = start; index < raw.length; index += 1) {
+		const character = raw[index];
+		if (escaped) {
+			escaped = false;
+			continue;
+		}
+		if (character === "\\") {
+			escaped = true;
+			continue;
+		}
+		if (character === '"') {
+			inString = !inString;
+			continue;
+		}
+		if (inString) continue;
+		if (character === "{") {
+			depth += 1;
+			continue;
+		}
+		if (character === "}") {
+			depth -= 1;
+			if (depth === 0) return raw.slice(start, index + 1);
+		}
+	}
+	return undefined;
 }

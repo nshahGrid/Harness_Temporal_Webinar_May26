@@ -12,7 +12,7 @@ Both paths produce draft-only marketing artifacts with citations and an explicit
 ## Contents
 
 - `src/` - TypeScript Temporal workflow, activities, CLI commands, web UI, and agent harness code.
-- `skills/` - Pi skills used for customer-story research and CodeAct scaffold generation.
+- `skills/` - Pi skills used for customer-story research, Temporal Agent Skill-backed CodeAct scaffold generation, and demo narrative generation.
 - `.pi/free-web-search.json` - Pi free-web-search tool configuration.
 - `test/` - Unit and harness tests for extraction, policy, redaction, and CodeAct validation.
 - `artifacts/.gitignore` - placeholder for generated local output.
@@ -80,6 +80,12 @@ CodeAct-only harness run:
 npm run harness-demo -- --agent codeact
 ```
 
+To move CodeAct scaffold validation and repair into Temporal history, set
+`CODEACT_SCAFFOLD_CHILD_WORKFLOW=1` and run through `npm run cloud` so the
+TypeScript worker can execute the parent and child workflows. The harness keeps
+the local validate/repair loop as the fallback when the child workflow path is
+disabled or unavailable.
+
 Manual Temporal run:
 
 ```bash
@@ -140,4 +146,4 @@ See `CONTRIBUTING.md` for development setup, validation expectations, and pull r
 
 This project is licensed under the MIT License. See `LICENSE`.
 
-See `TEMPORAL_SKILL_CITATIONS.md` for the Temporal Python references and source-citation policy used by the generated CodeAct scaffold.
+See `TEMPORAL_SKILL_CITATIONS.md` for the Temporal Agent Skill, Python references, and source-citation policy used by the generated CodeAct scaffold.

@@ -88,9 +88,9 @@ export async function runCodeActAgent(
 	harness.reason(
 		`The scaffold must cover this business scenario:\n${useCaseOutput}`,
 	);
-	const skillContext = await harness.bash("temporal skill context load");
+	const agentSkillOutput = await harness.bash("temporal agent skill load");
 	harness.reason(
-		`Loaded the relevant Temporal Python skill references into the CodeAct prompt context:\n${skillContext}`,
+		`Code generation will use the Temporal Agent Skill:\n${agentSkillOutput}`,
 	);
 	const primitiveOutput = await harness.bash("temporal scaffold primitives");
 	harness.reason(
@@ -98,9 +98,15 @@ export async function runCodeActAgent(
 	);
 	const generatedFiles = await harness.bash("temporal scaffold write");
 	harness.reason(`The bash path generated files:\n${generatedFiles}`);
+	const validationReferences = await harness.bash(
+		"temporal scaffold validation-references",
+	);
+	harness.observe(
+		`Generation and validation are checked against selected Temporal Python references:\n${validationReferences}`,
+	);
 	const scaffoldSource = harness.didUseCodeActScaffoldFallback()
-		? "Pi attempted the scaffold but failed strict validation; the harness used the validated fallback scaffold so the demo could continue."
-		: "Pi generated the scaffold and it passed strict validation.";
+		? "Pi attempted the Temporal Agent Skill-backed scaffold but failed strict validation; the harness used the validated fallback scaffold so the demo could continue."
+		: "Pi generated the scaffold with the Temporal Agent Skill and it passed strict validation.";
 	harness.observe(scaffoldSource);
 	const validation = await harness.bash("temporal scaffold validate");
 	harness.observe(`Validation passed:\n${validation}`);
@@ -118,10 +124,14 @@ export async function runCodeActAgent(
 		[
 			"Write the narrative as a CodeAct walkthrough.",
 			harness.didUseCodeActScaffoldFallback()
-				? "Explain that Pi/LLM attempted the Python scaffold, failed strict harness validation, and the harness continued with the validated fallback scaffold before linting, validating, and running extraction."
-				: "Explain that Pi/LLM generated the Python scaffold, then the harness wrote, linted, validated, and ran it.",
+				? "Explain that Pi/LLM used the Temporal Agent Skill to attempt the Python scaffold, failed strict harness validation, and the harness continued with the validated fallback scaffold before linting, validating, and running extraction."
+				: "Explain that Pi/LLM used the Temporal Agent Skill to generate the Python scaffold, then the harness wrote, linted, validated, and ran it.",
 			"Business use case:",
 			useCaseOutput,
+			"Temporal Agent Skill:",
+			agentSkillOutput,
+			"Validation references:",
+			validationReferences,
 			"Validation:",
 			validation,
 			"Extraction:",
@@ -187,8 +197,8 @@ function codeActResultMessage(
 	cloudRun: ReturnType<PiTemporalHarness["getLatestCodeActTemporalCloudRun"]>,
 ): string {
 	const scaffoldSource = harness.didUseCodeActScaffoldFallback()
-		? "Pi's generated scaffold failed strict validation, so the harness used the validated fallback scaffold"
-		: "The LLM generated Python Temporal code";
+		? "Pi's Temporal Agent Skill-backed scaffold failed strict validation, so the harness used the validated fallback scaffold"
+		: "The Temporal Agent Skill-backed LLM generated Python Temporal code";
 	if (cloudRun?.status === "completed") {
 		return `${scaffoldSource}; the harness wrote it, linted it, started a generated Python worker, launched Temporal Cloud workflow ${cloudRun.workflowId}, observed activities ${cloudRun.activities.join(", ")}, and produced codeact-case-study-page.html with ${recordCount}/${targetCount} records.`;
 	}

@@ -47,6 +47,10 @@ export async function runTemporalPiHarnessDemo(
 				codeActConcurrency: options.codeActConcurrency,
 				llmGenerate: options.llmGenerate,
 				enableCodeActTemporalCloud: options.enableCodeActTemporalCloud,
+				enableCodeActScaffoldChildWorkflow:
+					options.enableCodeActScaffoldChildWorkflow,
+				enablePiExtractionCache: options.enablePiExtractionCache,
+				piExtractionCachePath: options.piExtractionCachePath,
 			},
 		);
 		switch (mode) {
