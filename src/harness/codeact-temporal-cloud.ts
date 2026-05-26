@@ -174,7 +174,7 @@ export async function runGeneratedTemporalCloudScaffold(
 		options.onStatus?.(
 			`Starting generated Python Temporal worker on task queue ${taskQueue}.`,
 		);
-		worker = spawn(python, ["src/worker.py"], {
+		worker = spawn(python, ["-m", "src.worker"], {
 			cwd: options.scaffoldDir,
 			env,
 			stdio: "pipe",
@@ -201,12 +201,16 @@ export async function runGeneratedTemporalCloudScaffold(
 		options.onStatus?.(
 			`Launching generated Python workflow ${workflowId} in Temporal Cloud.`,
 		);
-		const { stdout, stderr } = await execFileAsync(python, ["src/client.py"], {
-			cwd: options.scaffoldDir,
-			env,
-			timeout: options.timeoutMs ?? 180_000,
-			maxBuffer: 1024 * 1024 * 8,
-		});
+		const { stdout, stderr } = await execFileAsync(
+			python,
+			["-m", "src.client"],
+			{
+				cwd: options.scaffoldDir,
+				env,
+				timeout: options.timeoutMs ?? 180_000,
+				maxBuffer: 1024 * 1024 * 8,
+			},
+		);
 		if (stderr.trim()) options.onWorkerOutput?.(redactSecrets(stderr.trim()));
 		const clientEvents = parsePythonClientEvents(stdout);
 		const completed = [...clientEvents]

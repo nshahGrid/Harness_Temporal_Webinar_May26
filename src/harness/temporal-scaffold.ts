@@ -126,8 +126,8 @@ export function buildTemporalAgentSkillGenerationSummary(): string {
 	return [
 		"Temporal Agent Skill configured for CodeAct scaffold generation:",
 		`- Skill: ${temporalDeveloperSkillName}`,
-		`- Pi scaffold-generation calls pass --skill ${temporalDeveloperSkillPath}.`,
-		"- The task prompt supplies the demo-specific bash-heredoc output contract; the Temporal Agent Skill supplies Temporal SDK code-generation guidance.",
+		`- Pi scaffold-planning and per-file generation calls pass --skill ${temporalDeveloperSkillPath}.`,
+		"- The planning prompt supplies the shared file/API contract; per-file prompts generate individual files against that contract; the Temporal Agent Skill supplies Temporal SDK code-generation guidance.",
 		"- The generated scaffold must still pass the harness parser, py_compile, generated-code lint, and Temporal primitive validation before it can run.",
 		...temporalSkillReferences.map(
 			(reference) =>
@@ -147,9 +147,36 @@ export function buildTemporalValidationReferenceSummary(): string {
 	].join("\n");
 }
 
-interface ScaffoldFile {
+export interface ScaffoldFile {
 	path: string;
 	purpose: string;
+	contents: string;
+}
+
+export interface TemporalScaffoldPlanFile {
+	path: string;
+	purpose: string;
+	publicContract: string;
+	imports: string[];
+	dependsOn: string[];
+}
+
+export interface TemporalScaffoldPlan {
+	scenarioName: string;
+	taskQueue: string;
+	workflowName: string;
+	activityNames: string[];
+	modelFields: string[];
+	signals: string[];
+	queries: string[];
+	envVars: string[];
+	taskQueueBehavior: string;
+	files: TemporalScaffoldPlanFile[];
+}
+
+export interface TemporalScaffoldGeneratedFile {
+	path: string;
+	purpose?: string;
 	contents: string;
 }
 
@@ -159,7 +186,7 @@ export interface TemporalScaffoldSpec {
 	files: ScaffoldFile[];
 }
 
-const requiredScaffoldPaths = [
+export const requiredScaffoldPaths = [
 	"requirements.txt",
 	"src/models.py",
 	"src/activities.py",
@@ -169,6 +196,252 @@ const requiredScaffoldPaths = [
 	"src/extractor.py",
 	"README.md",
 ] as const;
+
+export type TemporalScaffoldPath = (typeof requiredScaffoldPaths)[number];
+
+export function createTemporalScaffoldPlan(
+	spec = createTemporalScaffoldSpec(),
+): TemporalScaffoldPlan {
+	const purposeByPath = new Map(
+		spec.files.map((file) => [file.path, file.purpose]),
+	);
+	return {
+		scenarioName: spec.scenarioName,
+		taskQueue: spec.taskQueue,
+		workflowName: "TemporalCaseStudyResearchWorkflow",
+		activityNames: [
+			"discover_case_study_urls",
+			"fetch_and_extract_case_study",
+			"export_marketing_html",
+		],
+		modelFields: [
+			"url",
+			"company",
+			"headline",
+			"summary",
+			"evidence_quote",
+			"temporal_value",
+			"failed_pages",
+			"attempted_urls",
+			"discovered_urls",
+			"records",
+		],
+		signals: ["approve_export"],
+		queries: ["current_state"],
+		envVars: [
+			"TEMPORAL_ADDRESS",
+			"TEMPORAL_NAMESPACE",
+			"TEMPORAL_API_KEY",
+			"TEMPORAL_TASK_QUEUE",
+			"PI_COMMAND",
+			"PI_EXTRACTION_CACHE_PATH",
+			"CODEACT_WORKFLOW_ID",
+			"CODEACT_TARGET_COUNT",
+			"CODEACT_BATCH_SIZE",
+			"CODEACT_PAGE_BUDGET",
+		],
+		taskQueueBehavior:
+			"worker.py and client.py must read TEMPORAL_TASK_QUEUE at runtime; workflows.py must omit task_queue on execute_activity calls so activities run on the workflow's current task queue.",
+		files: requiredScaffoldPaths.map((path) => ({
+			path,
+			purpose: purposeByPath.get(path) ?? "Generated scaffold file",
+			publicContract: scaffoldPublicContract(path),
+			imports: scaffoldImports(path),
+			dependsOn: scaffoldDependencies(path),
+		})),
+	};
+}
+
+export function parseTemporalScaffoldPlanFromLlm(
+	markdown: string,
+): TemporalScaffoldPlan {
+	const parsed = parseJsonFromLlm(markdown) as Partial<TemporalScaffoldPlan>;
+	const fallback = createTemporalScaffoldPlan();
+	const parsedFiles = Array.isArray(parsed.files) ? parsed.files : [];
+	const filesByPath = new Map<string, Partial<TemporalScaffoldPlanFile>>();
+	for (const file of parsedFiles) {
+		if (!file || typeof file.path !== "string") continue;
+		const path = normalizeScaffoldPath(file.path);
+		if (requiredScaffoldPaths.includes(path as TemporalScaffoldPath)) {
+			filesByPath.set(path, file);
+		}
+	}
+	for (const path of requiredScaffoldPaths) {
+		if (!filesByPath.has(path)) {
+			throw new Error(`Scaffold plan is missing ${path}.`);
+		}
+	}
+	const fallbackFileByPath = new Map(
+		fallback.files.map((file) => [file.path, file]),
+	);
+	return {
+		scenarioName: stringOr(parsed.scenarioName, fallback.scenarioName),
+		taskQueue: stringOr(parsed.taskQueue, fallback.taskQueue),
+		workflowName: stringOr(parsed.workflowName, fallback.workflowName),
+		activityNames: nonEmptyStringArray(
+			parsed.activityNames,
+			fallback.activityNames,
+		),
+		modelFields: nonEmptyStringArray(parsed.modelFields, fallback.modelFields),
+		signals: nonEmptyStringArray(parsed.signals, fallback.signals),
+		queries: nonEmptyStringArray(parsed.queries, fallback.queries),
+		envVars: nonEmptyStringArray(parsed.envVars, fallback.envVars),
+		taskQueueBehavior: stringOr(
+			parsed.taskQueueBehavior,
+			fallback.taskQueueBehavior,
+		),
+		files: requiredScaffoldPaths.map((path) => {
+			const parsedFile = filesByPath.get(path) ?? {};
+			const fallbackFile = fallbackFileByPath.get(path);
+			if (!fallbackFile) throw new Error(`Missing fallback plan for ${path}.`);
+			return {
+				path,
+				purpose: stringOr(parsedFile.purpose, fallbackFile.purpose),
+				publicContract: stringOr(
+					parsedFile.publicContract,
+					fallbackFile.publicContract,
+				),
+				imports: nonEmptyStringArray(parsedFile.imports, fallbackFile.imports),
+				dependsOn: stringArray(parsedFile.dependsOn, fallbackFile.dependsOn),
+			};
+		}),
+	};
+}
+
+export function buildTemporalScaffoldSpecFromFiles(
+	files: TemporalScaffoldGeneratedFile[],
+	plan = createTemporalScaffoldPlan(),
+): TemporalScaffoldSpec {
+	const planByPath = new Map(plan.files.map((file) => [file.path, file]));
+	const fileByPath = new Map<string, TemporalScaffoldGeneratedFile>();
+	for (const file of files) {
+		const path = normalizeScaffoldPath(file.path);
+		if (!requiredScaffoldPaths.includes(path as TemporalScaffoldPath)) continue;
+		fileByPath.set(path, { ...file, path });
+	}
+	for (const path of requiredScaffoldPaths) {
+		if (!fileByPath.has(path)) {
+			throw new Error(`Generated scaffold file batch is missing ${path}.`);
+		}
+	}
+	return {
+		scenarioName: plan.scenarioName,
+		taskQueue: plan.taskQueue,
+		files: requiredScaffoldPaths.map((path) => {
+			const file = fileByPath.get(path);
+			if (!file) throw new Error(`Generated scaffold is missing ${path}.`);
+			return {
+				path,
+				purpose:
+					file.purpose ??
+					planByPath.get(path)?.purpose ??
+					"Pi-generated scaffold file",
+				contents: file.contents,
+			};
+		}),
+	};
+}
+
+export function parseTemporalScaffoldFileContentsFromLlm(
+	markdown: string,
+	path: string,
+): string {
+	const trimmed = markdown.trim();
+	const fenced = /^```[a-zA-Z0-9_-]*\s*\n([\s\S]*?)\n```$/.exec(trimmed);
+	let contents = (fenced?.[1] ?? trimmed).replace(/\r\n?/g, "\n");
+	const normalizedPath = normalizeScaffoldPath(path);
+	const pathHeader = new RegExp(`^${escapeRegExp(normalizedPath)}\\s*\\n`);
+	contents = contents.replace(pathHeader, "");
+	if (!contents.trim()) {
+		throw new Error(`Pi returned empty contents for ${normalizedPath}.`);
+	}
+	return contents.trimEnd();
+}
+
+export function fallbackTemporalScaffoldFile(
+	path: string,
+): TemporalScaffoldGeneratedFile {
+	const normalizedPath = normalizeScaffoldPath(path);
+	const file = createTemporalScaffoldSpec().files.find(
+		(candidate) => candidate.path === normalizedPath,
+	);
+	if (!file) throw new Error(`No fallback scaffold file exists for ${path}.`);
+	return { ...file };
+}
+
+export function selectTemporalScaffoldRepairPaths(error: string): string[] {
+	const message = error.toLowerCase();
+	const paths = new Set<string>();
+	const add = (...items: string[]) => {
+		for (const item of items) paths.add(item);
+	};
+	for (const path of requiredScaffoldPaths) {
+		if (message.includes(path.toLowerCase())) add(path);
+	}
+	if (
+		/casestudyrecord|case_study_record|model field|evidence_quote|temporal_value|failed_pages|attempted_urls|discovered_urls|records/.test(
+			message,
+		)
+	) {
+		add("src/models.py", "src/activities.py", "src/workflows.py");
+	}
+	if (
+		/pi_command|pi_extraction_cache_path|extract_assistant_text|parse_extraction_response|http|case-study url|case_study_pattern|applicationerror|export_marketing_html|subprocess|urllib/.test(
+			message,
+		)
+	) {
+		add("src/activities.py", "src/models.py", "requirements.txt");
+	}
+	if (
+		/workflow|retrypolicy|asyncio|page_budget|execute_activity|zip\(batch|workflow_execution_timeout|activity exception|query|signal/.test(
+			message,
+		)
+	) {
+		add("src/workflows.py", "src/models.py", "src/activities.py");
+	}
+	if (
+		/sandbox|imports_passed_through|os\.getenv|restrictedworkflowaccesserror|restricted workflow access|activity import/.test(
+			message,
+		)
+	) {
+		add("src/workflows.py", "src/activities.py");
+	}
+	if (
+		/task_queue|task queue|temporal_task_queue|temporal_address|temporal_api_key|rpc_metadata|api_key|tls/.test(
+			message,
+		)
+	) {
+		add("src/worker.py", "src/client.py", "src/workflows.py");
+	}
+	if (
+		/client|workflow_query_failed|codeact_workflow_id|codeact_temporal_event|state_list_count|to_jsonable|handle\.result/.test(
+			message,
+		)
+	) {
+		add("src/client.py", "src/workflows.py", "src/models.py");
+	}
+	if (
+		/worker|activity_executor|threadpoolexecutor|required_env/.test(message)
+	) {
+		add("src/worker.py", "src/activities.py", "src/workflows.py");
+	}
+	if (/requirements|third-party|beautifulsoup4|requests|lxml/.test(message)) {
+		add("requirements.txt", "src/activities.py");
+	}
+	if (/extractor|bounded_parallel_extract/.test(message))
+		add("src/extractor.py");
+	if (/readme|narrative|documentation/.test(message)) add("README.md");
+	const selected = requiredScaffoldPaths.filter((path) => paths.has(path));
+	return selected.length > 0
+		? selected
+		: [
+				"src/models.py",
+				"src/activities.py",
+				"src/workflows.py",
+				"src/worker.py",
+				"src/client.py",
+			];
+}
 
 export function parseTemporalScaffoldSpecFromLlm(
 	markdown: string,
@@ -331,6 +604,83 @@ export function createTemporalScaffoldSpec(): TemporalScaffoldSpec {
 			},
 		],
 	};
+}
+
+function scaffoldPublicContract(path: string): string {
+	const contracts: Record<string, string> = {
+		"requirements.txt":
+			"Declare temporalio and every third-party package imported by generated Python files.",
+		"src/models.py":
+			"Define dataclass contracts for CaseStudyRecord, FailedPage, and ResearchState with durable workflow state fields.",
+		"src/activities.py":
+			"Expose synchronous Temporal activities for URL discovery, Pi-backed extraction, and HTML export.",
+		"src/workflows.py":
+			"Expose TemporalCaseStudyResearchWorkflow with run, approve_export signal, and current_state query.",
+		"src/worker.py":
+			"Connect to Temporal Cloud from env vars and poll TEMPORAL_TASK_QUEUE with a ThreadPoolExecutor activity executor.",
+		"src/client.py":
+			"Start the generated workflow, query state non-fatally, signal approval, await result, and print CODEACT_TEMPORAL_EVENT JSON lines.",
+		"src/extractor.py":
+			"Expose bounded_parallel_extract as a local ThreadPoolExecutor helper mirroring the generated worker shape.",
+		"README.md":
+			"Explain the generated scaffold, env vars, workflow/activity roles, and validation behavior.",
+	};
+	return contracts[path] ?? "Generated scaffold file contract.";
+}
+
+function scaffoldImports(path: string): string[] {
+	const imports: Record<string, string[]> = {
+		"src/models.py": ["dataclasses", "typing"],
+		"src/activities.py": [
+			"models.CaseStudyRecord",
+			"temporalio.activity",
+			"temporalio.exceptions.ApplicationError",
+			"urllib.request",
+			"subprocess",
+			"shlex",
+			"os",
+		],
+		"src/workflows.py": [
+			"temporalio.workflow",
+			"temporalio.common.RetryPolicy",
+			"models",
+			"activities",
+		],
+		"src/worker.py": [
+			"temporalio.client.Client",
+			"temporalio.worker.Worker",
+			"workflows.TemporalCaseStudyResearchWorkflow",
+			"activities",
+		],
+		"src/client.py": [
+			"temporalio.client.Client",
+			"workflows.TemporalCaseStudyResearchWorkflow",
+			"dataclasses.asdict",
+			"dataclasses.is_dataclass",
+		],
+		"src/extractor.py": ["concurrent.futures.ThreadPoolExecutor"],
+	};
+	return imports[path] ?? [];
+}
+
+function scaffoldDependencies(path: string): string[] {
+	const dependencies: Record<string, string[]> = {
+		"requirements.txt": ["src/activities.py", "src/worker.py", "src/client.py"],
+		"src/activities.py": ["src/models.py", "requirements.txt"],
+		"src/workflows.py": ["src/models.py", "src/activities.py"],
+		"src/worker.py": ["src/workflows.py", "src/activities.py"],
+		"src/client.py": ["src/workflows.py", "src/models.py"],
+		"README.md": [
+			"requirements.txt",
+			"src/models.py",
+			"src/activities.py",
+			"src/workflows.py",
+			"src/worker.py",
+			"src/client.py",
+			"src/extractor.py",
+		],
+	};
+	return dependencies[path] ?? [];
 }
 
 function extractShellScript(markdown: string): string {
@@ -774,6 +1124,19 @@ async function lintGeneratedPythonScaffold(targetDir: string): Promise<string> {
 				"src/client.py must normalize handle.result() with to_jsonable/result_state before counting records, failed_pages, or attempted_urls because Temporal Cloud may decode WorkflowState as a dict",
 			);
 		}
+		if (file === "src/workflows.py") {
+			const unsafeActivityImports = unsafeWorkflowActivityImportLines(contents);
+			if (unsafeActivityImports.length > 0) {
+				failures.push(
+					`src/workflows.py must import activity functions only inside a top-level with workflow.unsafe.imports_passed_through(): block; do not import activities inside workflow.run or other workflow methods because activities.py uses os.getenv/subprocess and must bypass the Temporal workflow sandbox (line${unsafeActivityImports.length === 1 ? "" : "s"} ${unsafeActivityImports.join(", ")})`,
+				);
+			}
+			if (!hasTopLevelPassThroughActivityImport(contents)) {
+				failures.push(
+					"src/workflows.py must import activities inside a top-level with workflow.unsafe.imports_passed_through(): block so Activity modules that read os.getenv are passed through instead of loaded by the workflow sandbox",
+				);
+			}
+		}
 		if (
 			file === "src/workflows.py" &&
 			/discover_case_study_urls,\s*batch_size/.test(contents)
@@ -868,6 +1231,63 @@ async function lintGeneratedPythonScaffold(targetDir: string): Promise<string> {
 		"generated-code lint: passed 6 Python files",
 		"rules: no trailing whitespace, no tabs, no bare except, no literal API keys",
 	].join("\n");
+}
+
+function hasTopLevelPassThroughActivityImport(contents: string): boolean {
+	const passThroughLines = topLevelPassThroughLineNumbers(contents);
+	return activityImportLineNumbers(contents).some((lineNumber) =>
+		passThroughLines.has(lineNumber),
+	);
+}
+
+function unsafeWorkflowActivityImportLines(contents: string): number[] {
+	const passThroughLines = topLevelPassThroughLineNumbers(contents);
+	return activityImportLineNumbers(contents).filter(
+		(lineNumber) => !passThroughLines.has(lineNumber),
+	);
+}
+
+function activityImportLineNumbers(contents: string): number[] {
+	const lines = contents.split("\n");
+	const lineNumbers: number[] = [];
+	lines.forEach((line, index) => {
+		if (
+			/^\s*(?:from\s+(?:\.?activities|src\.activities)\s+import\b|from\s+\.\s+import\s+activities\b|import\s+(?:activities|src\.activities)\b)/.test(
+				line,
+			)
+		) {
+			lineNumbers.push(index + 1);
+		}
+	});
+	return lineNumbers;
+}
+
+function topLevelPassThroughLineNumbers(contents: string): Set<number> {
+	const lines = contents.split("\n");
+	const lineNumbers = new Set<number>();
+	lines.forEach((line, index) => {
+		if (
+			!/^with workflow\.unsafe\.imports_passed_through\(\):\s*(?:#.*)?$/.test(
+				line,
+			)
+		) {
+			return;
+		}
+		for (
+			let innerIndex = index + 1;
+			innerIndex < lines.length;
+			innerIndex += 1
+		) {
+			const innerLine = lines[innerIndex];
+			if (!innerLine.trim()) {
+				lineNumbers.add(innerIndex + 1);
+				continue;
+			}
+			if (/^\S/.test(innerLine)) break;
+			lineNumbers.add(innerIndex + 1);
+		}
+	});
+	return lineNumbers;
 }
 
 function modelsSource(): string {
@@ -1647,4 +2067,26 @@ function parseJsonFromLlm(markdown: string): unknown {
 	if (start < 0 || end < start)
 		throw new Error("LLM response did not contain a JSON object.");
 	return JSON.parse(raw.slice(start, end + 1));
+}
+
+function stringOr(value: unknown, fallback: string): string {
+	return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
+function stringArray(value: unknown, fallback: string[] = []): string[] {
+	if (!Array.isArray(value)) return [...fallback];
+	const strings = value
+		.filter((item): item is string => typeof item === "string")
+		.map((item) => item.trim())
+		.filter(Boolean);
+	return strings.length > 0 ? strings : [...fallback];
+}
+
+function nonEmptyStringArray(value: unknown, fallback: string[]): string[] {
+	const strings = stringArray(value, fallback);
+	return strings.length > 0 ? strings : [...fallback];
+}
+
+function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

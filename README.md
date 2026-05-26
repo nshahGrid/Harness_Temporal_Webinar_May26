@@ -5,7 +5,7 @@ Open-source demo showing how to wrap LLM-driven research in a durable, inspectab
 The demo researches Temporal-owned customer case-study pages, then compares two agent execution styles:
 
 - **ReAct**: Pi/LLM chooses the live-search branches and bounded concurrency while the harness uses the same target/page budget as CodeAct, then extracts evidence from selected pages.
-- **CodeAct**: Pi/LLM generates Python Temporal workflow code, the harness validates it, and the generated workflow can run in Temporal Cloud.
+- **CodeAct**: Pi/LLM plans a Python Temporal scaffold, generates each scaffold file from that shared contract, the harness validates the integrated result, and the generated workflow can run in Temporal Cloud.
 
 Both paths produce draft-only marketing artifacts with citations and an explicit approval gate. The demo does not publish pages, send email, update CRM, or call external business systems.
 
@@ -80,11 +80,15 @@ CodeAct-only harness run:
 npm run harness-demo -- --agent codeact
 ```
 
-To move CodeAct scaffold validation and repair into Temporal history, set
+CodeAct scaffold generation now uses a coordinator flow: one Pi call creates a
+shared scaffold plan, one Pi call generates each required file, validation runs
+against the integrated result, and repair only regenerates the failing file or a
+dependent file set selected from the validation error. To move that
+plan/file/validate/repair sequence into Temporal history, set
 `CODEACT_SCAFFOLD_CHILD_WORKFLOW=1` and run through `npm run cloud` so the
 TypeScript worker can execute the parent and child workflows. The harness keeps
-the local validate/repair loop as the fallback when the child workflow path is
-disabled or unavailable.
+the local coordinator as the fallback when the child workflow path is disabled
+or unavailable.
 
 Manual Temporal run:
 

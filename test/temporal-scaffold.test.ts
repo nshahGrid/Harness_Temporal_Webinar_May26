@@ -4,13 +4,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import {
+	buildTemporalScaffoldFilePrompt,
+	buildTemporalScaffoldFileRepairPrompt,
 	buildTemporalScaffoldLlmPrompt,
+	buildTemporalScaffoldPlanPrompt,
 	buildTemporalScaffoldRepairPrompt,
 } from "../src/harness/pi-harness.ts";
 import {
+	createTemporalScaffoldPlan,
 	createTemporalScaffoldSpec,
+	parseTemporalScaffoldFileContentsFromLlm,
+	parseTemporalScaffoldPlanFromLlm,
 	parseTemporalScaffoldSpecFromBash,
 	renderTemporalScaffoldBashScript,
+	selectTemporalScaffoldRepairPaths,
 	validateTemporalScaffold,
 	writeTemporalScaffold,
 } from "../src/harness/temporal-scaffold.ts";
@@ -47,34 +54,40 @@ test("CodeAct bash heredoc scaffold round-trips into required generated files", 
 });
 
 test("CodeAct scaffold prompts spell out PI_COMMAND runtime invocation", () => {
-	const prompt = buildTemporalScaffoldLlmPrompt();
-	const repair = buildTemporalScaffoldRepairPrompt(
-		prompt,
+	const plan = createTemporalScaffoldPlan();
+	const legacyPrompt = buildTemporalScaffoldLlmPrompt();
+	const legacyRepair = buildTemporalScaffoldRepairPrompt(
+		legacyPrompt,
 		'Generated scaffold src/activities.py is missing "PI_COMMAND"',
 		'result = subprocess.run(["pi", "ask", prompt])',
 		1,
 	);
+	const prompt = buildTemporalScaffoldPlanPrompt();
+	const file = buildTemporalScaffoldFilePrompt(plan, "src/activities.py");
+	const repair = buildTemporalScaffoldFileRepairPrompt(
+		plan,
+		"src/activities.py",
+		'Generated scaffold src/activities.py is missing "PI_COMMAND"',
+		'result = subprocess.run(["pi", "ask", prompt])',
+		{},
+		["src/activities.py"],
+		1,
+	);
 
-	for (const text of [prompt, repair]) {
+	for (const text of [prompt, file, repair, legacyPrompt, legacyRepair]) {
 		assert.match(text, /PI_COMMAND/);
-		assert.match(text, /shlex\.split\(os\.getenv\("PI_COMMAND", "pi"\)\)/);
-		assert.match(
-			text,
-			/subprocess\.run\(\[\*command, "--mode", "json", "--no-session", "--no-tools", "-p", prompt\]/,
-		);
+		assert.match(text, /--mode/);
+		assert.match(text, /--no-session/);
+		assert.match(text, /--no-tools/);
 		assert.match(text, /extract_assistant_text/);
 		assert.match(text, /text_from_content/);
 		assert.match(text, /parse_extraction_response/);
 		assert.match(text, /parse_json_object/);
 		assert.match(text, /parse_labeled_fields/);
-		assert.match(text, /first balanced JSON object|labeled fields/);
+		assert.match(text, /JSON object|labeled fields/);
 		assert.match(text, /PI_EXTRACTION_CACHE_PATH/);
 		assert.match(text, /read_extraction_cache/);
 		assert.match(text, /write_extraction_cache/);
-		assert.match(text, /last_assistant/);
-		assert.match(text, /event\.get\("messages"\)/);
-		assert.match(text, /stdout\.splitlines\(\)/);
-		assert.match(text, /json\.loads\(output\)/);
 		assert.match(
 			text,
 			/unparseable Pi extraction responses|could not be parsed into fields/,
@@ -86,7 +99,6 @@ test("CodeAct scaffold prompts spell out PI_COMMAND runtime invocation", () => {
 			text,
 			/activity exception objects|stringify|workflow logs|\{result\}/,
 		);
-		assert.match(text, /\["pi", "ask", prompt\]/);
 		assert.match(text, /state=result/);
 		assert.match(text, /result = await handle\.result\(\)/);
 		assert.match(text, /result_state = to_jsonable\(result\)/);
@@ -99,6 +111,37 @@ test("CodeAct scaffold prompts spell out PI_COMMAND runtime invocation", () => {
 			/dict-shaped record payloads|dict-shaped CaseStudyRecord payloads/,
 		);
 	}
+});
+
+test("CodeAct scaffold plan and file parsers accept coordinated outputs", () => {
+	const plan = createTemporalScaffoldPlan();
+	const parsedPlan = parseTemporalScaffoldPlanFromLlm(
+		JSON.stringify(plan, null, 2),
+	);
+	assert.equal(parsedPlan.workflowName, "TemporalCaseStudyResearchWorkflow");
+	assert.deepEqual(
+		parsedPlan.files.map((file) => file.path),
+		[
+			"requirements.txt",
+			"src/models.py",
+			"src/activities.py",
+			"src/workflows.py",
+			"src/worker.py",
+			"src/client.py",
+			"src/extractor.py",
+			"README.md",
+		],
+	);
+
+	const fileContents = parseTemporalScaffoldFileContentsFromLlm(
+		"```python\nfrom temporalio import workflow\n```",
+		"src/workflows.py",
+	);
+	assert.equal(fileContents, "from temporalio import workflow");
+	assert.deepEqual(
+		selectTemporalScaffoldRepairPaths("TEMPORAL_TASK_QUEUE mismatch"),
+		["src/workflows.py", "src/worker.py", "src/client.py"],
+	);
 });
 
 test("CodeAct scaffold validation rejects exact assistant JSON parsing", async () => {
@@ -507,6 +550,39 @@ test("CodeAct scaffold validation rejects unsupported workflow info timeout", as
 		await assert.rejects(
 			() => validateTemporalScaffold(targetDir),
 			/workflow_execution_timeout/,
+		);
+	} finally {
+		await rm(targetDir, { recursive: true, force: true });
+	}
+});
+
+test("CodeAct scaffold validation rejects activity imports inside workflow methods", async () => {
+	const targetDir = await mkdtemp(join(tmpdir(), "pi-temporal-scaffold-"));
+	try {
+		const spec = createTemporalScaffoldSpec();
+		const activityImport =
+			"from activities import discover_case_study_urls, fetch_and_extract_case_study, export_marketing_html";
+		const badSpec = {
+			...spec,
+			files: spec.files.map((file) =>
+				file.path === "src/workflows.py"
+					? {
+							...file,
+							contents: file.contents
+								.replace(`    ${activityImport}\n`, "")
+								.replace(
+									"        self._state.target_count = target_count",
+									`        ${activityImport}\n\n        self._state.target_count = target_count`,
+								),
+						}
+					: file,
+			),
+		};
+		await writeTemporalScaffold(targetDir, badSpec);
+
+		await assert.rejects(
+			() => validateTemporalScaffold(targetDir),
+			/Temporal workflow sandbox|top-level with workflow\.unsafe\.imports_passed_through/,
 		);
 	} finally {
 		await rm(targetDir, { recursive: true, force: true });

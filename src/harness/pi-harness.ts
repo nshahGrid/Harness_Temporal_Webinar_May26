@@ -40,10 +40,16 @@ import {
 } from "./scaffold-child-workflow.ts";
 import {
 	buildTemporalAgentSkillGenerationSummary,
+	buildTemporalScaffoldSpecFromFiles,
 	buildTemporalValidationReferenceSummary,
+	createTemporalScaffoldPlan,
 	createTemporalScaffoldSpec,
-	parseTemporalScaffoldSpecFromBash,
-	parseTemporalScaffoldSpecFromLlm,
+	parseTemporalScaffoldFileContentsFromLlm,
+	parseTemporalScaffoldPlanFromLlm,
+	requiredScaffoldPaths,
+	selectTemporalScaffoldRepairPaths,
+	type TemporalScaffoldGeneratedFile,
+	type TemporalScaffoldPlan,
 	type TemporalScaffoldSpec,
 	temporalDeveloperSkillName,
 	temporalPrimitiveCatalog,
@@ -1336,7 +1342,10 @@ export class PiTemporalHarness {
 					[
 						"The Temporal child workflow fed the previous generated scaffold failure back to Pi.",
 						attempt.errorMessage || "Previous scaffold attempt failed.",
-						"Pi had to return a complete corrected bash-heredoc scaffold.",
+						attempt.repairPaths?.length
+							? `Targeted repair files: ${attempt.repairPaths.join(", ")}`
+							: "Targeted repair files were selected by the validator.",
+						"Pi had to regenerate only the requested file or dependent file set from the shared plan.",
 					].join("\n"),
 				);
 			}
@@ -1355,7 +1364,7 @@ export class PiTemporalHarness {
 		if (result.usedFallback) {
 			this.recordTool(
 				"scaffold_generation_fallback",
-				"codeact-temporal-bash-scaffold",
+				"codeact-temporal-scaffold",
 				[
 					"The Temporal child workflow exhausted Pi scaffold repair attempts.",
 					"The workflow continued with the validated Temporal scaffold so the demo does not hang.",
@@ -1366,9 +1375,9 @@ export class PiTemporalHarness {
 			this.recordTool(
 				"llm_output_validated",
 				result.attempts.find((attempt) => attempt.status === "validated")
-					?.purpose ?? "codeact-temporal-bash-scaffold",
+					?.purpose ?? "codeact-temporal-scaffold",
 				[
-					"Temporal child workflow accepted the scaffold after parsing, py_compile, generated-code lint, and Temporal primitive validation.",
+					"Temporal child workflow accepted the coordinated scaffold after planning, per-file generation, py_compile, generated-code lint, and Temporal primitive validation.",
 					"",
 					result.acceptedOutput ?? "(accepted scaffold output omitted)",
 				].join("\n"),
@@ -1376,7 +1385,7 @@ export class PiTemporalHarness {
 			if ((result.acceptedAttempt ?? 1) > 1) {
 				this.recordTool(
 					"scaffold_repair_success",
-					`codeact-temporal-bash-scaffold-repair-${(result.acceptedAttempt ?? 1) - 1}`,
+					`codeact-temporal-scaffold-repair-${(result.acceptedAttempt ?? 1) - 1}`,
 					[
 						`Temporal child workflow repair attempt ${(result.acceptedAttempt ?? 1) - 1} produced a valid scaffold.`,
 						...result.validation,
@@ -1404,103 +1413,272 @@ export class PiTemporalHarness {
 		const repairAttempts = Number.isFinite(configuredRepairAttempts)
 			? Math.max(3, Math.floor(configuredRepairAttempts))
 			: 3;
-		const maxAttempts = 1 + repairAttempts;
-		const basePrompt = buildTemporalScaffoldLlmPrompt();
-		let prompt = basePrompt;
-		let previousOutput = "";
+		const filesByPath = new Map<string, TemporalScaffoldGeneratedFile>();
+		let plan: TemporalScaffoldPlan;
 		let previousError = "";
-
-		for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-			const purpose =
-				attempt === 1
-					? "codeact-temporal-bash-scaffold"
-					: `codeact-temporal-bash-scaffold-repair-${attempt - 1}`;
-			if (attempt > 1) {
-				this.recordWorker({
-					workerId: "codeact-scaffold-agent",
-					phase: "retrying",
-					message: `Repair attempt ${attempt - 1}: Pi is correcting the generated Temporal scaffold.`,
-				});
-				this.recordTool(
-					"scaffold_repair_feedback",
-					purpose,
-					[
-						"The harness fed the previous generated scaffold failure back to Pi.",
-						previousError,
-						"Pi must return a complete corrected bash-heredoc scaffold.",
-					].join("\n"),
-				);
-			}
-
-			try {
-				const output = await this.generateWithLlm(
-					{
-						purpose,
-						prompt,
-						skillName: temporalDeveloperSkillName,
-						timeoutMs,
-					},
-					{ recordOutput: false },
-				);
-				previousOutput = output;
-				const spec = this.parseTemporalScaffoldOutput(output);
-				const generated = await writeTemporalScaffold(scaffoldDir, spec);
-				const validation = await validateTemporalScaffold(scaffoldDir);
-				this.recordTool(
-					"llm_output_validated",
-					purpose,
-					[
-						"Pi returned a scaffold candidate and the harness accepted it after parsing, py_compile, generated-code lint, and Temporal primitive validation.",
-						"",
-						output,
-					].join("\n"),
-				);
-				if (attempt > 1) {
-					this.recordTool(
-						"scaffold_repair_success",
-						purpose,
-						[
-							`Pi repair attempt ${attempt - 1} produced a valid scaffold.`,
-							...validation,
-						].join("\n"),
-					);
-				}
-				return { spec, generated, validation, usedFallback: false };
-			} catch (error) {
-				previousError = error instanceof Error ? error.message : String(error);
-				this.recordTool(
-					"llm_output_rejected",
-					purpose,
-					[
-						"Rejected Pi scaffold candidate before execution.",
-						`Reason: ${previousError}`,
-						"Invalid candidate code is intentionally not displayed as generated code because it may contain fabricated placeholder URLs or broken Temporal wiring.",
-					].join("\n"),
-				);
-				this.record(
-					"observation",
-					`Pi scaffold attempt ${attempt}/${maxAttempts} failed validation. ${previousError}`,
-				);
-				if (attempt < maxAttempts) {
-					prompt = buildTemporalScaffoldRepairPrompt(
-						basePrompt,
-						previousError,
-						previousOutput,
-						attempt,
-					);
-				}
-			}
+		let repairPaths: string[] = [];
+		try {
+			const planOutput = await this.generateWithLlm(
+				{
+					purpose: "codeact-temporal-scaffold-plan",
+					prompt: buildTemporalScaffoldPlanPrompt(),
+					skillName: temporalDeveloperSkillName,
+					timeoutMs,
+				},
+				{ recordOutput: false },
+			);
+			plan = parseTemporalScaffoldPlanFromLlm(planOutput);
+			this.recordTool(
+				"scaffold_plan",
+				"codeact-temporal-scaffold-plan",
+				JSON.stringify(plan, null, 2),
+			);
+			this.recordWorker({
+				workerId: "codeact-scaffold-coordinator",
+				phase: "planned",
+				message:
+					"Pi generated the shared scaffold contract; per-file Pi calls will now generate files from that plan.",
+			});
+		} catch (error) {
+			previousError = error instanceof Error ? error.message : String(error);
+			this.recordTool(
+				"llm_output_rejected",
+				"codeact-temporal-scaffold-plan",
+				[
+					"Rejected Pi scaffold plan before file generation.",
+					`Reason: ${previousError}`,
+				].join("\n"),
+			);
+			return this.writeFallbackTemporalScaffold(scaffoldDir, previousError);
 		}
 
+		const initialBatch = await this.generateTemporalScaffoldFileBatch({
+			plan,
+			paths: [...requiredScaffoldPaths],
+			filesByPath,
+			timeoutMs,
+		});
+		previousError = initialBatch.errorMessage;
+		repairPaths = initialBatch.repairPaths;
+		if (!previousError) {
+			const validation = await this.validateGeneratedTemporalScaffoldBatch(
+				scaffoldDir,
+				plan,
+				filesByPath,
+				"codeact-temporal-scaffold-validate",
+			);
+			if (validation.status === "validated") return validation.result;
+			previousError = validation.errorMessage;
+			repairPaths = validation.repairPaths;
+		}
+
+		for (
+			let repairAttempt = 1;
+			repairAttempt <= repairAttempts;
+			repairAttempt += 1
+		) {
+			const purpose = `codeact-temporal-scaffold-repair-${repairAttempt}`;
+			this.recordWorker({
+				workerId: "codeact-scaffold-agent",
+				phase: "retrying",
+				message: `Repair attempt ${repairAttempt}: Pi is regenerating ${repairPaths.join(", ")}.`,
+			});
+			this.recordTool(
+				"scaffold_repair_feedback",
+				purpose,
+				[
+					"The harness fed the integrated scaffold failure back to Pi.",
+					previousError,
+					`Targeted repair files: ${repairPaths.join(", ")}`,
+					"Pi must return one complete corrected file per requested file, using the shared plan for cross-file coherence.",
+				].join("\n"),
+			);
+			const repairBatch = await this.generateTemporalScaffoldFileBatch({
+				plan,
+				paths: repairPaths,
+				filesByPath,
+				timeoutMs,
+				repairError: previousError,
+				repairAttempt,
+				repairPaths,
+			});
+			previousError = repairBatch.errorMessage;
+			repairPaths = repairBatch.repairPaths;
+			if (previousError) continue;
+			const validation = await this.validateGeneratedTemporalScaffoldBatch(
+				scaffoldDir,
+				plan,
+				filesByPath,
+				purpose,
+			);
+			if (validation.status === "validated") {
+				this.recordTool(
+					"scaffold_repair_success",
+					purpose,
+					[
+						`Pi targeted repair attempt ${repairAttempt} produced a valid integrated scaffold.`,
+						...validation.result.validation,
+					].join("\n"),
+				);
+				return validation.result;
+			}
+			previousError = validation.errorMessage;
+			repairPaths = validation.repairPaths;
+		}
+
+		return this.writeFallbackTemporalScaffold(scaffoldDir, previousError);
+	}
+
+	private async generateTemporalScaffoldFileBatch(input: {
+		plan: TemporalScaffoldPlan;
+		paths: string[];
+		filesByPath: Map<string, TemporalScaffoldGeneratedFile>;
+		timeoutMs: number;
+		repairError?: string;
+		repairAttempt?: number;
+		repairPaths?: string[];
+	}): Promise<{ errorMessage: string; repairPaths: string[] }> {
+		const currentFiles = () =>
+			Object.fromEntries(
+				[...input.filesByPath.entries()].map(([path, file]) => [
+					path,
+					file.contents,
+				]),
+			);
+		const results = await Promise.all(
+			input.paths.map(async (path) => {
+				const purpose = input.repairAttempt
+					? scaffoldFileRepairPurpose(path, input.repairAttempt)
+					: scaffoldFilePurpose(path);
+				try {
+					const prompt = input.repairAttempt
+						? buildTemporalScaffoldFileRepairPrompt(
+								input.plan,
+								path,
+								input.repairError || "Previous scaffold validation failed.",
+								input.filesByPath.get(path)?.contents ?? "",
+								currentFiles(),
+								input.repairPaths ?? input.paths,
+								input.repairAttempt,
+							)
+						: buildTemporalScaffoldFilePrompt(input.plan, path, currentFiles());
+					const output = await this.generateWithLlm(
+						{
+							purpose,
+							prompt,
+							skillName: temporalDeveloperSkillName,
+							timeoutMs: input.timeoutMs,
+						},
+						{ recordOutput: false },
+					);
+					const contents = parseTemporalScaffoldFileContentsFromLlm(
+						output,
+						path,
+					);
+					const planFile = input.plan.files.find((file) => file.path === path);
+					input.filesByPath.set(path, {
+						path,
+						purpose: planFile?.purpose,
+						contents,
+					});
+					this.recordTool(
+						"llm_output_file",
+						purpose,
+						[
+							`Accepted file candidate for ${path}.`,
+							`${contents.length} characters captured for integrated validation.`,
+						].join("\n"),
+					);
+					return { path, errorMessage: "" };
+				} catch (error) {
+					const errorMessage =
+						error instanceof Error ? error.message : String(error);
+					this.recordTool(
+						"llm_output_rejected",
+						purpose,
+						[
+							`Rejected Pi file candidate for ${path}.`,
+							`Reason: ${errorMessage}`,
+							"Invalid candidate code is intentionally not displayed as generated code because it may contain fabricated placeholder URLs or broken Temporal wiring.",
+						].join("\n"),
+					);
+					return { path, errorMessage };
+				}
+			}),
+		);
+		const failed = results.filter((result) => result.errorMessage);
+		if (failed.length === 0) return { errorMessage: "", repairPaths: [] };
+		return {
+			errorMessage: failed
+				.map((result) => `${result.path}: ${result.errorMessage}`)
+				.join("\n"),
+			repairPaths: failed.map((result) => result.path),
+		};
+	}
+
+	private async validateGeneratedTemporalScaffoldBatch(
+		scaffoldDir: string,
+		plan: TemporalScaffoldPlan,
+		filesByPath: Map<string, TemporalScaffoldGeneratedFile>,
+		purpose: string,
+	): Promise<
+		| { status: "validated"; result: ScaffoldAttemptResult }
+		| { status: "rejected"; errorMessage: string; repairPaths: string[] }
+	> {
+		try {
+			const spec = buildTemporalScaffoldSpecFromFiles(
+				[...filesByPath.values()],
+				plan,
+			);
+			const generated = await writeTemporalScaffold(scaffoldDir, spec);
+			const validation = await validateTemporalScaffold(scaffoldDir);
+			this.recordTool(
+				"llm_output_validated",
+				purpose,
+				[
+					"Pi plan plus per-file scaffold candidates passed integrated validation.",
+					...validation,
+				].join("\n"),
+			);
+			return {
+				status: "validated",
+				result: { spec, generated, validation, usedFallback: false },
+			};
+		} catch (error) {
+			const errorMessage =
+				error instanceof Error ? error.message : String(error);
+			const repairPaths = selectTemporalScaffoldRepairPaths(errorMessage);
+			this.recordTool(
+				"llm_output_rejected",
+				purpose,
+				[
+					"Rejected integrated Pi scaffold candidate before execution.",
+					`Reason: ${errorMessage}`,
+					`Targeted repair files: ${repairPaths.join(", ")}`,
+					"Invalid candidate code is intentionally not displayed as generated code because it may contain fabricated placeholder URLs or broken Temporal wiring.",
+				].join("\n"),
+			);
+			this.record(
+				"observation",
+				`Integrated Pi scaffold failed validation. ${errorMessage}`,
+			);
+			return { status: "rejected", errorMessage, repairPaths };
+		}
+	}
+
+	private async writeFallbackTemporalScaffold(
+		scaffoldDir: string,
+		previousError: string,
+	): Promise<ScaffoldAttemptResult> {
 		this.record(
 			"observation",
 			`Pi scaffold repair attempts were exhausted; continuing with the demo-safe fallback scaffold. ${previousError}`,
 		);
 		this.recordTool(
 			"scaffold_generation_fallback",
-			"codeact-temporal-bash-scaffold",
+			"codeact-temporal-scaffold",
 			[
-				"Pi did not return a complete valid bash-heredoc scaffold after repair feedback.",
+				"Pi did not return a complete valid coordinated scaffold after plan, per-file generation, and targeted repair feedback.",
 				"The harness is continuing with its validated Temporal scaffold so the demo does not hang.",
 				"Generated-code lint and py_compile still run before extraction.",
 			].join("\n"),
@@ -1509,26 +1687,6 @@ export class PiTemporalHarness {
 		const generated = await writeTemporalScaffold(scaffoldDir, spec);
 		const validation = await validateTemporalScaffold(scaffoldDir);
 		return { spec, generated, validation, usedFallback: true };
-	}
-
-	private parseTemporalScaffoldOutput(output: string): TemporalScaffoldSpec {
-		try {
-			return parseTemporalScaffoldSpecFromBash(output);
-		} catch (bashError) {
-			const bashMessage =
-				bashError instanceof Error ? bashError.message : String(bashError);
-			this.record(
-				"observation",
-				`Pi bash scaffold was incomplete or used an unsupported file-write shape; trying legacy file-bundle parser. ${bashMessage}`,
-			);
-			try {
-				return parseTemporalScaffoldSpecFromLlm(output);
-			} catch {
-				throw new Error(
-					`Pi output did not contain a complete scaffold. Last bash parser error: ${bashMessage}`,
-				);
-			}
-		}
 	}
 
 	private record(
@@ -1771,6 +1929,159 @@ function uniqueUrls(urls: string[]): string[] {
 	return [...new Set(urls.map((url) => url.replace(/\/$/, "")))];
 }
 
+export function buildTemporalScaffoldPlanPrompt(): string {
+	const plan = createTemporalScaffoldPlan();
+	return [
+		"You are Pi planning a multi-file CodeAct Temporal Python scaffold.",
+		`Use the loaded ${temporalDeveloperSkillName} Temporal Agent Skill for SDK structure, determinism, activities, workers, clients, signals, queries, retries, and durable AI-agent patterns.`,
+		"Return ONLY one JSON object. Do not return Markdown fences, bash, file contents, prose, diffs, or patches.",
+		"The workflow coordinator will pass this shared plan to one later Pi interaction per file, then validate the integrated scaffold.",
+		"Required JSON shape:",
+		"{",
+		'  "scenarioName": "Temporal customer-proof case-study research",',
+		'  "taskQueue": "TEMPORAL_TASK_QUEUE",',
+		'  "workflowName": "TemporalCaseStudyResearchWorkflow",',
+		'  "activityNames": ["discover_case_study_urls", "fetch_and_extract_case_study", "export_marketing_html"],',
+		'  "modelFields": ["url", "company", "headline", "summary", "evidence_quote", "temporal_value", "failed_pages", "attempted_urls", "discovered_urls", "records"],',
+		'  "signals": ["approve_export"],',
+		'  "queries": ["current_state"],',
+		'  "envVars": ["TEMPORAL_ADDRESS", "TEMPORAL_NAMESPACE", "TEMPORAL_API_KEY", "TEMPORAL_TASK_QUEUE", "PI_COMMAND", "PI_EXTRACTION_CACHE_PATH", "CODEACT_WORKFLOW_ID", "CODEACT_TARGET_COUNT", "CODEACT_BATCH_SIZE", "CODEACT_PAGE_BUDGET"],',
+		'  "taskQueueBehavior": "short contract",',
+		'  "files": [{"path": "src/models.py", "purpose": "...", "publicContract": "...", "imports": [], "dependsOn": []}]',
+		"}",
+		"",
+		"Required files in files[]:",
+		...plan.files.map(
+			(file) =>
+				`- ${file.path}: ${file.purpose}; contract=${file.publicContract}; imports=${file.imports.join(", ") || "none"}; dependsOn=${file.dependsOn.join(", ") || "none"}`,
+		),
+		"",
+		"Cross-file contract:",
+		...temporalScaffoldValidationContractLines(),
+	].join("\n");
+}
+
+export function buildTemporalScaffoldFilePrompt(
+	plan: TemporalScaffoldPlan,
+	path: string,
+	currentFiles: Record<string, string> = {},
+): string {
+	const filePlan = plan.files.find((file) => file.path === path);
+	const dependencyContext = renderScaffoldFileContext(currentFiles, path);
+	return [
+		"You are Pi generating exactly one file for a coordinated CodeAct Temporal Python scaffold.",
+		`File to generate: ${path}`,
+		"Return ONLY the complete file contents for that path. Do not return bash, heredocs, JSON, Markdown fences, prose, diffs, or patches.",
+		"Follow the shared plan exactly so this file stays coherent with every other generated file.",
+		"",
+		"Shared scaffold plan:",
+		JSON.stringify(plan, null, 2),
+		"",
+		"File contract:",
+		JSON.stringify(filePlan ?? { path }, null, 2),
+		"",
+		dependencyContext,
+		"",
+		"Validation contract this file must satisfy with the integrated scaffold:",
+		...temporalScaffoldValidationContractLines(),
+	].join("\n");
+}
+
+export function buildTemporalScaffoldFileRepairPrompt(
+	plan: TemporalScaffoldPlan,
+	path: string,
+	error: string,
+	previousContents: string,
+	currentFiles: Record<string, string>,
+	repairPaths: string[],
+	attempt: number,
+): string {
+	const filePlan = plan.files.find((file) => file.path === path);
+	return [
+		"You are Pi repairing one file from an integrated CodeAct Temporal Python scaffold after validation failed.",
+		`Repair attempt: ${attempt}.`,
+		`File to regenerate: ${path}`,
+		`Repair scope: ${repairPaths.join(", ")}`,
+		"Return ONLY the complete corrected file contents for that single path. Do not return bash, heredocs, JSON, Markdown fences, prose, diffs, or patches.",
+		"Preserve public contracts from the shared plan. Update imports, names, and field usage so this file remains coherent with the other files in the repair scope.",
+		"",
+		"Validation or parser failure to fix:",
+		truncateForRepairPrompt(error, 5000),
+		"",
+		"Shared scaffold plan:",
+		JSON.stringify(plan, null, 2),
+		"",
+		"File contract:",
+		JSON.stringify(filePlan ?? { path }, null, 2),
+		"",
+		"Current integrated files available for coherence checks:",
+		renderScaffoldFileContext(currentFiles, path, 8000),
+		"",
+		"Previous contents for this file:",
+		truncateForRepairPrompt(previousContents || "<no prior contents>", 12000),
+		"",
+		"Repair routing hints:",
+		"- Model field mismatches usually require src/models.py, src/activities.py, and src/workflows.py to agree.",
+		"- Task queue failures usually require src/worker.py, src/client.py, and src/workflows.py to agree.",
+		"- Pi extraction failures usually require src/activities.py and requirements.txt to agree.",
+		"",
+		"Validation contract still applies:",
+		...temporalScaffoldValidationContractLines(),
+	].join("\n");
+}
+
+function temporalScaffoldValidationContractLines(): string[] {
+	return [
+		"- requirements.txt must include temporalio and every third-party Python package imported by generated files.",
+		"- src/models.py must define CaseStudyRecord fields url, company, headline, summary, evidence_quote, and temporal_value plus workflow state records, attempted_urls, discovered_urls, and failed_pages.",
+		"- src/workflows.py must define @workflow.defn class TemporalCaseStudyResearchWorkflow with approve_export signal and current_state query.",
+		"- src/workflows.py must import activity functions inside a top-level with workflow.unsafe.imports_passed_through(): block, must not import activities inside workflow.run or any workflow method, must use RetryPolicy(maximum_attempts=3), execute activities without hardcoded task_queue, and use asyncio.gather(*tasks, return_exceptions=True).",
+		"- src/workflows.py must accept page_budget, pass page_budget to discovery, bound extraction pages, map parallel outputs with zip(batch, results), and avoid isinstance(result, CaseStudyRecord) filters.",
+		'- src/workflows.py must not stringify activity exception objects in workflow logs or state updates with patterns such as f"...{result}".',
+		"- src/activities.py must define synchronous @activity.defn functions, use ApplicationError, crawl https://temporal.io/in-use and https://temporal.io/sitemap.xml, and only accept /resources/case-studies/ URLs with a bounded [a-z0-9\\-/]+ slug regex.",
+		'- src/activities.py must handle urllib.error.HTTPError 404 as non_retryable=True and delegate semantic extraction to Pi via PI_COMMAND using subprocess.run([*command, "--mode", "json", "--no-session", "--no-tools", "-p", prompt], ...).',
+		"- src/activities.py must parse Pi JSON-mode stdout as NDJSON events with extract_assistant_text, text_from_content, parse_extraction_response, parse_json_object, and parse_labeled_fields; parse the first JSON object or labeled fields and do not json.loads the whole stdout.",
+		"- src/activities.py must mark unparseable Pi extraction responses that could not be parsed into fields as non_retryable=True ApplicationError failures.",
+		"- src/activities.py must support PI_EXTRACTION_CACHE_PATH with read_extraction_cache and write_extraction_cache and must normalize dict-shaped CaseStudyRecord payloads before export_marketing_html accesses fields.",
+		'- src/worker.py and src/client.py must set TASK_QUEUE = required_env("TEMPORAL_TASK_QUEUE"), connect with TEMPORAL_ADDRESS, TEMPORAL_NAMESPACE, TEMPORAL_API_KEY, api_key=api_key, and tls=True when an API key is present.',
+		"- src/worker.py must use Worker(client, task_queue=TASK_QUEUE, ...) with activity_executor=ThreadPoolExecutor(...).",
+		'- src/client.py must emit CODEACT_TEMPORAL_EVENT JSON lines, wrap current_state query failures as workflow_query_failed, signal approve_export, then use result = await handle.result(); result_state = to_jsonable(result); emit("workflow_completed", workflow_id=workflow_id, state=result, records=state_list_count(result_state, "records"), failures=state_list_count(result_state, "failed_pages"), attempted=state_list_count(result_state, "attempted_urls")).',
+		"- src/extractor.py must import ThreadPoolExecutor and define bounded_parallel_extract.",
+		"- Generated Python must pass py_compile and lint: no tabs, no trailing whitespace, no bare except, no literal API keys, no TEMPORAL_HOST, and no rpc_metadata.",
+	];
+}
+
+function renderScaffoldFileContext(
+	currentFiles: Record<string, string>,
+	focusPath: string,
+	maxCharacters = 6000,
+): string {
+	const entries = Object.entries(currentFiles)
+		.filter(([path]) => path !== focusPath)
+		.sort(([left], [right]) => left.localeCompare(right));
+	if (entries.length === 0) return "No files have been generated yet.";
+	return entries
+		.map(([path, contents]) =>
+			[
+				`--- ${path} ---`,
+				truncateForRepairPrompt(contents, maxCharacters),
+			].join("\n"),
+		)
+		.join("\n\n");
+}
+
+function scaffoldFilePurpose(path: string): string {
+	return `codeact-temporal-scaffold-file-${slugScaffoldPath(path)}`;
+}
+
+function scaffoldFileRepairPurpose(path: string, attempt: number): string {
+	return `codeact-temporal-scaffold-repair-${attempt}-${slugScaffoldPath(path)}`;
+}
+
+function slugScaffoldPath(path: string): string {
+	return path.replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "");
+}
+
 export function buildTemporalScaffoldLlmPrompt(): string {
 	const scaffold = createTemporalScaffoldSpec();
 	return [
@@ -1807,7 +2118,8 @@ export function buildTemporalScaffoldLlmPrompt(): string {
 		"- src/models.py must define workflow state with records, attempted_urls, discovered_urls, and failed_pages.",
 		"- src/workflows.py must contain exactly: @workflow.defn class TemporalCaseStudyResearchWorkflow",
 		"- src/workflows.py must contain @workflow.signal async def approve_export and @workflow.query def current_state.",
-		"- src/workflows.py must import activity functions inside with workflow.unsafe.imports_passed_through(): so network libraries used by Activities are not imported through the workflow sandbox.",
+		"- src/workflows.py must import activity functions inside a top-level with workflow.unsafe.imports_passed_through(): block so network/env/subprocess code used by Activities is passed through before workflow execution.",
+		"- src/workflows.py must not import activities inside workflow.run or any workflow method; importing activities during workflow execution loads activities.py in the Temporal workflow sandbox and can fail on os.getenv/subprocess restrictions.",
 		"- src/workflows.py must contain RetryPolicy(maximum_attempts=3).",
 		"- src/workflows.py must contain asyncio.gather(*tasks, return_exceptions=True).",
 		"- src/workflows.py must accept page_budget and use it to bound discovered URLs before extraction.",
@@ -1920,7 +2232,7 @@ export function buildTemporalScaffoldRepairPrompt(
 		"The harness will parse the heredocs, write the files, run py_compile, lint, and validate Temporal primitives again.",
 		"Repair rule: preserve working files from the prior attempt, but update every file needed to satisfy the missing literal below.",
 		"If the failure mentions src/models.py, define CaseStudyRecord with url, company, headline, summary, evidence_quote, and temporal_value.",
-		"If the failure mentions workflow.unsafe.imports_passed_through or workflow sandbox, import models and activities inside with workflow.unsafe.imports_passed_through(): in src/workflows.py.",
+		"If the failure mentions workflow.unsafe.imports_passed_through, workflow sandbox, os.getenv, RestrictedWorkflowAccessError, or activity imports, update src/workflows.py so all activity function imports are inside a top-level with workflow.unsafe.imports_passed_through(): block and remove any from activities import ... statements from workflow.run or other workflow methods.",
 		"If the failure mentions requirements.txt, add every third-party package imported by generated code, for example requests, beautifulsoup4, or lxml.",
 		"If the failure mentions src/worker.py, include activity_executor and Worker(client, task_queue=TASK_QUEUE in src/worker.py.",
 		'If the failure mentions TEMPORAL_TASK_QUEUE, hardcoding, or a stale task queue literal, update both src/worker.py and src/client.py to set TASK_QUEUE = required_env("TEMPORAL_TASK_QUEUE") and use TASK_QUEUE everywhere. Do not hardcode or default to any fixed task queue.',

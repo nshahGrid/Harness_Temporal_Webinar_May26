@@ -6,10 +6,7 @@ import { test } from "node:test";
 import { codeActTaskQueueForRun } from "../src/harness/codeact-temporal-cloud.ts";
 import { runTemporalPiHarnessDemo } from "../src/harness/demo.ts";
 import { shouldRunCodeActScaffoldChildWorkflow } from "../src/harness/scaffold-child-workflow.ts";
-import {
-	createTemporalScaffoldSpec,
-	renderTemporalScaffoldBashScript,
-} from "../src/harness/temporal-scaffold.ts";
+import { createTemporalScaffoldSpec } from "../src/harness/temporal-scaffold.ts";
 import {
 	makeTemporalMockFetch,
 	mockCaseStudyUrls,
@@ -220,7 +217,7 @@ test("harness demo shows business-aligned simple, ReAct, and CodeAct agents", as
 			codeAct.toolCalls.some(
 				(call) =>
 					call.tool === "pi_agent_skill" &&
-					call.input === "codeact-temporal-bash-scaffold" &&
+					call.input === "codeact-temporal-scaffold-plan" &&
 					call.output.includes("skills/temporal-developer/SKILL.md"),
 			),
 		);
@@ -249,15 +246,15 @@ test("harness demo shows business-aligned simple, ReAct, and CodeAct agents", as
 		);
 		assert.ok(
 			codeAct.toolCalls.some(
-				(call) => call.input === "codeact-temporal-bash-scaffold",
+				(call) => call.input === "codeact-temporal-scaffold-plan",
 			),
 		);
 		const scaffoldPrompt =
 			codeAct.toolCalls.find(
-				(call) => call.input === "codeact-temporal-bash-scaffold",
+				(call) => call.input === "codeact-temporal-scaffold-plan",
 			)?.output ?? "";
 		assert.match(scaffoldPrompt, /Use the loaded temporal-developer/);
-		assert.match(scaffoldPrompt, /Strict validation contract:/);
+		assert.match(scaffoldPrompt, /Cross-file contract:/);
 		assert.match(scaffoldPrompt, /activity_executor/);
 		assert.match(scaffoldPrompt, /ThreadPoolExecutor/);
 		assert.ok(
@@ -448,7 +445,10 @@ test("CodeAct scaffold generation falls back instead of hanging the demo", async
 			codeActPageBudget: 6,
 			codeActConcurrency: 3,
 			llmGenerate: async (request) => {
-				if (request.purpose === "codeact-temporal-bash-scaffold") {
+				if (
+					request.purpose === "codeact-temporal-scaffold-file-src-models-py" ||
+					request.purpose.startsWith("codeact-temporal-scaffold-repair-")
+				) {
 					throw new Error("mock scaffold timeout");
 				}
 				return mockHarnessLlmGenerate(request);
@@ -495,14 +495,16 @@ test("CodeAct feeds malformed scaffold output back to Pi for repair", async () =
 			codeActPageBudget: 6,
 			codeActConcurrency: 3,
 			llmGenerate: async (request) => {
-				if (request.purpose === "codeact-temporal-bash-scaffold") {
-					return "this is malformed CodeAct output, not a bash heredoc scaffold";
+				if (
+					request.purpose === "codeact-temporal-scaffold-file-src-workflows-py"
+				) {
+					return "this is malformed CodeAct output, not a workflow file";
 				}
-				if (request.purpose === "codeact-temporal-bash-scaffold-repair-1") {
-					return mockHarnessLlmGenerate({
-						...request,
-						purpose: "codeact-temporal-bash-scaffold",
-					});
+				if (
+					request.purpose ===
+					"codeact-temporal-scaffold-repair-1-src-workflows-py"
+				) {
+					return scaffoldFileContents("src/workflows.py");
 				}
 				return mockHarnessLlmGenerate(request);
 			},
@@ -512,7 +514,8 @@ test("CodeAct feeds malformed scaffold output back to Pi for repair", async () =
 		assert.equal(codeAct?.mode, "codeact");
 		assert.ok(
 			codeAct.toolCalls.some(
-				(call) => call.input === "codeact-temporal-bash-scaffold-repair-1",
+				(call) =>
+					call.input === "codeact-temporal-scaffold-repair-1-src-workflows-py",
 			),
 		);
 		assert.ok(
@@ -546,8 +549,8 @@ test("CodeAct feeds malformed scaffold output back to Pi for repair", async () =
 test("CodeAct rejects placeholder case-study URLs without displaying them as generated code", async () => {
 	const outputDir = await mkdtemp(join(tmpdir(), "pi-temporal-harness-"));
 	try {
-		const placeholderScaffold = renderTemporalScaffoldBashScript(
-			createTemporalScaffoldSpec(),
+		const placeholderActivities = scaffoldFileContents(
+			"src/activities.py",
 		).replace(
 			"https://temporal.io/in-use",
 			"https://temporal.io/case-studies/example-1",
@@ -561,14 +564,16 @@ test("CodeAct rejects placeholder case-study URLs without displaying them as gen
 			codeActPageBudget: 6,
 			codeActConcurrency: 3,
 			llmGenerate: async (request) => {
-				if (request.purpose === "codeact-temporal-bash-scaffold") {
-					return placeholderScaffold;
+				if (
+					request.purpose === "codeact-temporal-scaffold-file-src-activities-py"
+				) {
+					return placeholderActivities;
 				}
-				if (request.purpose === "codeact-temporal-bash-scaffold-repair-1") {
-					return mockHarnessLlmGenerate({
-						...request,
-						purpose: "codeact-temporal-bash-scaffold",
-					});
+				if (
+					request.purpose ===
+					"codeact-temporal-scaffold-repair-1-src-activities-py"
+				) {
+					return scaffoldFileContents("src/activities.py");
 				}
 				return mockHarnessLlmGenerate(request);
 			},
@@ -600,9 +605,7 @@ test("CodeAct rejects placeholder case-study URLs without displaying them as gen
 test("CodeAct rejects mutable discovered URL indexing before Cloud execution", async () => {
 	const outputDir = await mkdtemp(join(tmpdir(), "pi-temporal-harness-"));
 	try {
-		const unsafeScaffold = renderTemporalScaffoldBashScript(
-			createTemporalScaffoldSpec(),
-		).replace(
+		const unsafeWorkflow = scaffoldFileContents("src/workflows.py").replace(
 			"for url, result in zip(batch, results):",
 			"for i, result in enumerate(results):\n                url = self._state.discovered_urls[len(self._state.attempted_urls) + i]",
 		);
@@ -615,14 +618,16 @@ test("CodeAct rejects mutable discovered URL indexing before Cloud execution", a
 			codeActPageBudget: 6,
 			codeActConcurrency: 3,
 			llmGenerate: async (request) => {
-				if (request.purpose === "codeact-temporal-bash-scaffold") {
-					return unsafeScaffold;
+				if (
+					request.purpose === "codeact-temporal-scaffold-file-src-workflows-py"
+				) {
+					return unsafeWorkflow;
 				}
-				if (request.purpose === "codeact-temporal-bash-scaffold-repair-1") {
-					return mockHarnessLlmGenerate({
-						...request,
-						purpose: "codeact-temporal-bash-scaffold",
-					});
+				if (
+					request.purpose ===
+					"codeact-temporal-scaffold-repair-1-src-workflows-py"
+				) {
+					return scaffoldFileContents("src/workflows.py");
 				}
 				return mockHarnessLlmGenerate(request);
 			},
@@ -659,9 +664,7 @@ test("CodeAct rejects mutable discovered URL indexing before Cloud execution", a
 test("CodeAct rejects workflow result type filters that drop Temporal payload records", async () => {
 	const outputDir = await mkdtemp(join(tmpdir(), "pi-temporal-harness-"));
 	try {
-		const unsafeScaffold = renderTemporalScaffoldBashScript(
-			createTemporalScaffoldSpec(),
-		).replace(
+		const unsafeWorkflow = scaffoldFileContents("src/workflows.py").replace(
 			"                else:\n                    self._state.records.append(result)",
 			"                elif isinstance(result, CaseStudyRecord):\n                    self._state.records.append(result)",
 		);
@@ -674,14 +677,16 @@ test("CodeAct rejects workflow result type filters that drop Temporal payload re
 			codeActPageBudget: 6,
 			codeActConcurrency: 3,
 			llmGenerate: async (request) => {
-				if (request.purpose === "codeact-temporal-bash-scaffold") {
-					return unsafeScaffold;
+				if (
+					request.purpose === "codeact-temporal-scaffold-file-src-workflows-py"
+				) {
+					return unsafeWorkflow;
 				}
-				if (request.purpose === "codeact-temporal-bash-scaffold-repair-1") {
-					return mockHarnessLlmGenerate({
-						...request,
-						purpose: "codeact-temporal-bash-scaffold",
-					});
+				if (
+					request.purpose ===
+					"codeact-temporal-scaffold-repair-1-src-workflows-py"
+				) {
+					return scaffoldFileContents("src/workflows.py");
 				}
 				return mockHarnessLlmGenerate(request);
 			},
@@ -843,4 +848,12 @@ function restoreEnv(key: string, value: string | undefined): void {
 		return;
 	}
 	process.env[key] = value;
+}
+
+function scaffoldFileContents(path: string): string {
+	const file = createTemporalScaffoldSpec().files.find(
+		(candidate) => candidate.path === path,
+	);
+	if (!file) throw new Error(`Unknown scaffold path: ${path}`);
+	return file.contents;
 }

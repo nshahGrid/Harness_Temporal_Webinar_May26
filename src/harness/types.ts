@@ -2,7 +2,11 @@ import type {
 	CaseStudyResearchResult,
 	FetchText,
 } from "../case-study-research.ts";
-import type { TemporalScaffoldSpec } from "./temporal-scaffold.ts";
+import type {
+	TemporalScaffoldGeneratedFile,
+	TemporalScaffoldPlan,
+	TemporalScaffoldSpec,
+} from "./temporal-scaffold.ts";
 
 export const harnessAgentModes = ["simple", "react", "codeact"] as const;
 
@@ -116,12 +120,61 @@ export interface CodeActScaffoldAttemptActivityResult {
 	validation?: string[];
 }
 
+export interface CodeActScaffoldPlanActivityInput {
+	timeoutMs?: number;
+}
+
+export interface CodeActScaffoldPlanActivityResult {
+	purpose: string;
+	status: "validated" | "rejected";
+	output?: string;
+	errorMessage?: string;
+	plan?: TemporalScaffoldPlan;
+}
+
+export interface CodeActScaffoldFileActivityInput {
+	path: string;
+	plan: TemporalScaffoldPlan;
+	timeoutMs?: number;
+	currentFiles?: Record<string, string>;
+	repairError?: string;
+	repairAttempt?: number;
+	repairPaths?: string[];
+	previousContents?: string;
+}
+
+export interface CodeActScaffoldFileActivityResult {
+	purpose: string;
+	status: "validated" | "rejected";
+	output?: string;
+	errorMessage?: string;
+	repairPaths?: string[];
+	file?: TemporalScaffoldGeneratedFile;
+}
+
+export interface CodeActScaffoldValidateActivityInput {
+	scaffoldDir: string;
+	plan: TemporalScaffoldPlan;
+	files: TemporalScaffoldGeneratedFile[];
+}
+
+export interface CodeActScaffoldValidateActivityResult {
+	purpose: string;
+	status: "validated" | "rejected";
+	errorMessage?: string;
+	repairPaths?: string[];
+	spec?: TemporalScaffoldSpec;
+	generated?: GeneratedFile[];
+	validation?: string[];
+}
+
 export interface CodeActScaffoldWorkflowAttempt {
 	attempt: number;
 	purpose: string;
 	status: "validated" | "rejected";
 	errorMessage?: string;
 	validation?: string[];
+	repairPaths?: string[];
 }
 
 export interface CodeActScaffoldWorkflowResult {

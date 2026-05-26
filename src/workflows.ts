@@ -10,6 +10,11 @@ import {
 } from "@temporalio/workflow";
 import type * as activities from "./activities.ts";
 import type {
+	TemporalScaffoldGeneratedFile,
+	TemporalScaffoldPlan,
+} from "./harness/temporal-scaffold.ts";
+import type {
+	CodeActScaffoldFileActivityResult,
 	CodeActScaffoldWorkflowAttempt,
 	CodeActScaffoldWorkflowInput,
 	CodeActScaffoldWorkflowResult,
@@ -40,6 +45,17 @@ const scaffoldActivity = proxyActivities<typeof activities>({
 		maximumAttempts: 1,
 	},
 });
+
+const scaffoldPaths = [
+	"requirements.txt",
+	"src/models.py",
+	"src/activities.py",
+	"src/workflows.py",
+	"src/worker.py",
+	"src/client.py",
+	"src/extractor.py",
+	"README.md",
+] as const;
 
 export const submitPiOutputSignal = defineSignal<[PiOutput]>("submitPiOutput");
 export const submitApprovalSignal =
@@ -173,45 +189,98 @@ export async function codeActScaffoldChildWorkflow(
 	input: CodeActScaffoldWorkflowInput,
 ): Promise<CodeActScaffoldWorkflowResult> {
 	const repairAttempts = normalizeRepairAttempts(input.repairAttempts);
-	const maxAttempts = 1 + repairAttempts;
 	const attempts: CodeActScaffoldWorkflowAttempt[] = [];
-	let previousError = "";
-	let previousOutput = "";
+	const filesByPath: Record<string, TemporalScaffoldGeneratedFile> = {};
 
-	for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-		const result = await scaffoldActivity.codeActScaffoldAttemptActivity({
+	const planResult = await scaffoldActivity.codeActScaffoldPlanActivity({
+		timeoutMs: input.timeoutMs,
+	});
+	attempts.push({
+		attempt: 1,
+		purpose: planResult.purpose,
+		status: planResult.status,
+		errorMessage: planResult.errorMessage,
+	});
+	if (planResult.status !== "validated" || !planResult.plan) {
+		return fallbackScaffold(input, attempts);
+	}
+
+	let previousError = "";
+	let repairPaths: string[] = [];
+	const initialFiles = await generateScaffoldFiles({
+		paths: [...scaffoldPaths],
+		plan: planResult.plan,
+		filesByPath,
+		timeoutMs: input.timeoutMs,
+		attempts,
+		attemptNumber: 1,
+	});
+	previousError = initialFiles.errorMessage;
+	repairPaths = initialFiles.repairPaths;
+	if (!previousError) {
+		const validation = await validateScaffoldFiles({
 			scaffoldDir: input.scaffoldDir,
-			attempt,
-			timeoutMs: input.timeoutMs,
-			previousError,
-			previousOutput,
+			plan: planResult.plan,
+			filesByPath,
+			attempts,
+			attemptNumber: 1,
 		});
-		attempts.push({
-			attempt,
-			purpose: result.purpose,
-			status: result.status,
-			errorMessage: result.errorMessage,
-			validation: result.validation,
-		});
-		if (
-			result.status === "validated" &&
-			result.spec &&
-			result.generated &&
-			result.validation
-		) {
+		if (validation.status === "validated") {
 			return {
 				childWorkflowId: input.childWorkflowId,
-				spec: result.spec,
-				generated: result.generated,
-				validation: result.validation,
+				spec: validation.spec,
+				generated: validation.generated,
+				validation: validation.validation,
 				usedFallback: false,
-				acceptedAttempt: attempt,
-				acceptedOutput: result.output,
+				acceptedAttempt: 1,
 				attempts,
 			};
 		}
-		previousError = result.errorMessage || "Generated scaffold was rejected.";
-		previousOutput = result.output || "";
+		previousError =
+			validation.errorMessage || "Generated scaffold failed validation.";
+		repairPaths = validation.repairPaths ?? [...scaffoldPaths];
+	}
+
+	for (
+		let repairAttempt = 1;
+		repairAttempt <= repairAttempts;
+		repairAttempt += 1
+	) {
+		const repaired = await generateScaffoldFiles({
+			paths: repairPaths,
+			plan: planResult.plan,
+			filesByPath,
+			timeoutMs: input.timeoutMs,
+			attempts,
+			attemptNumber: repairAttempt + 1,
+			repairError: previousError,
+			repairAttempt,
+			repairPaths,
+		});
+		previousError = repaired.errorMessage;
+		repairPaths = repaired.repairPaths;
+		if (previousError) continue;
+		const validation = await validateScaffoldFiles({
+			scaffoldDir: input.scaffoldDir,
+			plan: planResult.plan,
+			filesByPath,
+			attempts,
+			attemptNumber: repairAttempt + 1,
+		});
+		if (validation.status === "validated") {
+			return {
+				childWorkflowId: input.childWorkflowId,
+				spec: validation.spec,
+				generated: validation.generated,
+				validation: validation.validation,
+				usedFallback: false,
+				acceptedAttempt: repairAttempt + 1,
+				attempts,
+			};
+		}
+		previousError =
+			validation.errorMessage || "Generated scaffold failed validation.";
+		repairPaths = validation.repairPaths ?? [...scaffoldPaths];
 	}
 
 	const fallback = await scaffoldActivity.codeActScaffoldFallbackActivity({
@@ -229,6 +298,130 @@ export async function codeActScaffoldChildWorkflow(
 		validation: fallback.validation,
 		usedFallback: true,
 		attempts,
+	};
+}
+
+async function fallbackScaffold(
+	input: CodeActScaffoldWorkflowInput,
+	attempts: CodeActScaffoldWorkflowAttempt[],
+): Promise<CodeActScaffoldWorkflowResult> {
+	const fallback = await scaffoldActivity.codeActScaffoldFallbackActivity({
+		scaffoldDir: input.scaffoldDir,
+	});
+	if (!fallback.spec || !fallback.generated || !fallback.validation) {
+		throw new Error(
+			"Validated fallback scaffold activity returned no scaffold.",
+		);
+	}
+	return {
+		childWorkflowId: input.childWorkflowId,
+		spec: fallback.spec,
+		generated: fallback.generated,
+		validation: fallback.validation,
+		usedFallback: true,
+		attempts,
+	};
+}
+
+async function generateScaffoldFiles(input: {
+	paths: string[];
+	plan: TemporalScaffoldPlan;
+	filesByPath: Record<string, TemporalScaffoldGeneratedFile>;
+	timeoutMs?: number;
+	attempts: CodeActScaffoldWorkflowAttempt[];
+	attemptNumber: number;
+	repairError?: string;
+	repairAttempt?: number;
+	repairPaths?: string[];
+}): Promise<{ errorMessage: string; repairPaths: string[] }> {
+	const currentFiles = () =>
+		Object.fromEntries(
+			Object.entries(input.filesByPath).map(([path, file]) => [
+				path,
+				file.contents,
+			]),
+		);
+	const results = await Promise.all(
+		input.paths.map((path) =>
+			scaffoldActivity.codeActScaffoldFileActivity({
+				path,
+				plan: input.plan,
+				timeoutMs: input.timeoutMs,
+				currentFiles: currentFiles(),
+				repairError: input.repairError,
+				repairAttempt: input.repairAttempt,
+				repairPaths: input.repairPaths,
+				previousContents: input.filesByPath[path]?.contents,
+			}),
+		),
+	);
+	const failed: CodeActScaffoldFileActivityResult[] = [];
+	for (const result of results) {
+		input.attempts.push({
+			attempt: input.attemptNumber,
+			purpose: result.purpose,
+			status: result.status,
+			errorMessage: result.errorMessage,
+			repairPaths: result.repairPaths,
+		});
+		if (result.status === "validated" && result.file) {
+			input.filesByPath[result.file.path] = result.file;
+		} else {
+			failed.push(result);
+		}
+	}
+	if (failed.length === 0) return { errorMessage: "", repairPaths: [] };
+	const repairPaths = failed
+		.flatMap((result) => result.repairPaths ?? [])
+		.filter(Boolean);
+	return {
+		errorMessage: failed
+			.map(
+				(result) =>
+					`${result.repairPaths?.[0] ?? result.purpose}: ${result.errorMessage ?? "file generation failed"}`,
+			)
+			.join("\n"),
+		repairPaths: repairPaths.length > 0 ? repairPaths : [...scaffoldPaths],
+	};
+}
+
+async function validateScaffoldFiles(input: {
+	scaffoldDir: string;
+	plan: TemporalScaffoldPlan;
+	filesByPath: Record<string, TemporalScaffoldGeneratedFile>;
+	attempts: CodeActScaffoldWorkflowAttempt[];
+	attemptNumber: number;
+}) {
+	const result = await scaffoldActivity.codeActScaffoldValidateActivity({
+		scaffoldDir: input.scaffoldDir,
+		plan: input.plan,
+		files: Object.values(input.filesByPath),
+	});
+	input.attempts.push({
+		attempt: input.attemptNumber,
+		purpose: result.purpose,
+		status: result.status,
+		errorMessage: result.errorMessage,
+		repairPaths: result.repairPaths,
+		validation: result.validation,
+	});
+	if (
+		result.status === "validated" &&
+		result.spec &&
+		result.generated &&
+		result.validation
+	) {
+		return {
+			status: "validated" as const,
+			spec: result.spec,
+			generated: result.generated,
+			validation: result.validation,
+		};
+	}
+	return {
+		status: "rejected" as const,
+		errorMessage: result.errorMessage,
+		repairPaths: result.repairPaths,
 	};
 }
 

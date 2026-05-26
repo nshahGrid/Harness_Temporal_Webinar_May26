@@ -2,13 +2,20 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ApplicationFailure, Context } from "@temporalio/activity";
 import {
+	buildTemporalScaffoldFilePrompt,
+	buildTemporalScaffoldFileRepairPrompt,
 	buildTemporalScaffoldLlmPrompt,
+	buildTemporalScaffoldPlanPrompt,
 	buildTemporalScaffoldRepairPrompt,
 } from "./harness/pi-harness.ts";
 import {
+	buildTemporalScaffoldSpecFromFiles,
 	createTemporalScaffoldSpec,
+	parseTemporalScaffoldFileContentsFromLlm,
+	parseTemporalScaffoldPlanFromLlm,
 	parseTemporalScaffoldSpecFromBash,
 	parseTemporalScaffoldSpecFromLlm,
+	selectTemporalScaffoldRepairPaths,
 	temporalDeveloperSkillName,
 	validateTemporalScaffold,
 	writeTemporalScaffold,
@@ -16,6 +23,12 @@ import {
 import type {
 	CodeActScaffoldAttemptActivityInput,
 	CodeActScaffoldAttemptActivityResult,
+	CodeActScaffoldFileActivityInput,
+	CodeActScaffoldFileActivityResult,
+	CodeActScaffoldPlanActivityInput,
+	CodeActScaffoldPlanActivityResult,
+	CodeActScaffoldValidateActivityInput,
+	CodeActScaffoldValidateActivityResult,
 	CodeActScaffoldWorkflowInput,
 } from "./harness/types.ts";
 import { artifactsDir, packageRelative } from "./paths.ts";
@@ -134,6 +147,108 @@ export async function codeActScaffoldAttemptActivity(
 	}
 }
 
+export async function codeActScaffoldPlanActivity(
+	input: CodeActScaffoldPlanActivityInput,
+): Promise<CodeActScaffoldPlanActivityResult> {
+	const purpose = "codeact-temporal-scaffold-plan";
+	let output = "";
+	try {
+		output = await generateTextWithPi({
+			prompt: buildTemporalScaffoldPlanPrompt(),
+			skillName: temporalDeveloperSkillName,
+			timeoutMs: input.timeoutMs ?? 150_000,
+		});
+		const plan = parseTemporalScaffoldPlanFromLlm(output);
+		return { purpose, status: "validated", output, plan };
+	} catch (error) {
+		return {
+			purpose,
+			status: "rejected",
+			output: output || undefined,
+			errorMessage: redactedErrorMessage(error),
+		};
+	}
+}
+
+export async function codeActScaffoldFileActivity(
+	input: CodeActScaffoldFileActivityInput,
+): Promise<CodeActScaffoldFileActivityResult> {
+	const purpose = input.repairAttempt
+		? `codeact-temporal-scaffold-repair-${input.repairAttempt}-${slugScaffoldPath(input.path)}`
+		: `codeact-temporal-scaffold-file-${slugScaffoldPath(input.path)}`;
+	let output = "";
+	try {
+		const prompt = input.repairAttempt
+			? buildTemporalScaffoldFileRepairPrompt(
+					input.plan,
+					input.path,
+					input.repairError || "Previous scaffold validation failed.",
+					input.previousContents || "",
+					input.currentFiles ?? {},
+					input.repairPaths ?? [input.path],
+					input.repairAttempt,
+				)
+			: buildTemporalScaffoldFilePrompt(
+					input.plan,
+					input.path,
+					input.currentFiles ?? {},
+				);
+		output = await generateTextWithPi({
+			prompt,
+			skillName: temporalDeveloperSkillName,
+			timeoutMs: input.timeoutMs ?? 150_000,
+		});
+		const contents = parseTemporalScaffoldFileContentsFromLlm(
+			output,
+			input.path,
+		);
+		const planFile = input.plan.files.find((file) => file.path === input.path);
+		return {
+			purpose,
+			status: "validated",
+			output,
+			file: {
+				path: input.path,
+				purpose: planFile?.purpose,
+				contents,
+			},
+		};
+	} catch (error) {
+		return {
+			purpose,
+			status: "rejected",
+			output: output || undefined,
+			errorMessage: redactedErrorMessage(error),
+			repairPaths: [input.path],
+		};
+	}
+}
+
+export async function codeActScaffoldValidateActivity(
+	input: CodeActScaffoldValidateActivityInput,
+): Promise<CodeActScaffoldValidateActivityResult> {
+	try {
+		const spec = buildTemporalScaffoldSpecFromFiles(input.files, input.plan);
+		const generated = await writeTemporalScaffold(input.scaffoldDir, spec);
+		const validation = await validateTemporalScaffold(input.scaffoldDir);
+		return {
+			purpose: "codeact-temporal-scaffold-validate",
+			status: "validated",
+			spec,
+			generated,
+			validation,
+		};
+	} catch (error) {
+		const errorMessage = redactedErrorMessage(error);
+		return {
+			purpose: "codeact-temporal-scaffold-validate",
+			status: "rejected",
+			errorMessage,
+			repairPaths: selectTemporalScaffoldRepairPaths(errorMessage),
+		};
+	}
+}
+
 export async function codeActScaffoldFallbackActivity(
 	input: Pick<CodeActScaffoldWorkflowInput, "scaffoldDir">,
 ): Promise<
@@ -146,6 +261,10 @@ export async function codeActScaffoldFallbackActivity(
 	const generated = await writeTemporalScaffold(input.scaffoldDir, spec);
 	const validation = await validateTemporalScaffold(input.scaffoldDir);
 	return { spec, generated, validation };
+}
+
+function slugScaffoldPath(path: string): string {
+	return path.replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "");
 }
 
 function buildMarkdownArtifact(state: DemoWorkflowState): string {
